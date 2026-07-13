@@ -1,0 +1,3674 @@
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <print>
+
+#include "utility/between.h"
+
+#include "pascal/array.h"
+#include "pascal/range.h"
+#include "pascal/text_file.h"
+
+#include "tangle.h"
+
+using namespace std::literals;
+using pascal::operator""_r;
+
+// section 1
+constexpr auto banner = "This is a C++ reimplementation of TANGLE, Version 4.6"sv;
+
+// section 2 - 7 n/a
+// initialize will be defined in section 182 just before main because no variables have been declared,
+// yet
+
+// section 8
+constexpr size_t buf_size = 100;  /// maximum length of input line
+constexpr size_t max_bytes
+    = 45000;  /// number of bytes in identifiers, strings, and module names; must be < 65536
+constexpr size_t max_toks     = 65000;  /// number of bytes in compressed Pascal code; must be < 65536
+constexpr size_t max_names    = 4000;   /// number of identifiers, strings, module names; must be < 10240
+constexpr size_t max_texts    = 2000;   /// number of replacement texts, must be < 10240
+constexpr size_t hash_size    = 353;    /// should be prime
+constexpr size_t longest_name = 400;    /// module names shouldn’t be longer than this
+constexpr size_t line_length  = 72;     /// lines of Pascal output have at most this many characters
+constexpr size_t out_buf_size = 144;    /// length of output buffer, should be twice line_length
+constexpr size_t stack_size   = 50;     /// number of simultaneous levels of macro expansion
+constexpr size_t max_id_length
+    = 12;  /// long identifiers are chopped to this length, which must not exceed line length
+constexpr size_t unambig_length = 7;  /// identifiers must be unique if chopped to this length
+
+// additional declarations to avoid magic constants
+constexpr size_t max_modules = 027777;  /// 0x3FFF
+
+// section 9
+enum history_enum
+{
+    spotless,
+    harmless_message,
+    error_message,
+    fatal_message
+};
+
+// section 10
+auto history = history_enum {spotless};
+
+void
+mark_harmless ()
+{
+    if (history == spotless)
+    {
+        history = harmless_message;
+    }
+}
+
+void
+mark_error ()
+{ history = error_message; }
+
+void
+mark_fatal ()
+{ history = fatal_message; }
+
+// section 11
+// misleading name, ASCII is only 0..127
+using ascii_code_t = char8_t;
+
+constexpr bool
+is_digit (ascii_code_t c)
+{ return is_between (c, u8'0', u8'9'); }
+
+constexpr bool
+is_octal (ascii_code_t c)
+{ return is_between (c, u8'0', u8'7'); }
+
+constexpr bool
+is_upper (ascii_code_t c)
+{ return is_between (c, u8'A', u8'Z'); }
+
+constexpr bool
+is_lower (ascii_code_t c)
+{ return is_between (c, u8'a', u8'z'); }
+
+constexpr bool
+is_alpha (ascii_code_t c)
+{ return is_upper (c) || is_lower (c); }
+
+constexpr bool
+is_hex (ascii_code_t c)
+{ return is_digit (c) || is_between (c, u8'A', u8'F'); }
+
+constexpr bool
+is_alphanumeric (ascii_code_t c)
+{ return is_alpha (c) || is_digit (c); }
+
+// section 12
+using text_char                = unsigned char;  /// the data type of characters in text files
+constexpr auto first_text_char = text_char {0};  /// ordinal number of the smallest element of text char
+constexpr auto last_text_char  = text_char {255};  /// ordinal number of the largest element of text char
+// For text_file we use pascal::text_file.
+
+using text_string = std::basic_string_view<text_char>;
+
+// section 13, 14, 16, 17
+/// specifies conversion of input characters
+auto xord = std::array<ascii_code_t, 256> {};
+auto xchr = std::array<text_char, 256>  /// specified conversion of output characters
+    {
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', '!', '"', '#',  '$', '%',
+        '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4', '5', '6',  '7', '8',
+        '9', ':',  ';', '<', '=', '>', '?', '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I',  'J', 'K',
+        'L', 'M',  'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', '\\', ']', '^',
+        '_', '`',  'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',  'p', 'q',
+        'r', 's',  't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|', '}', '~', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ',
+        ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' '  //
+    };
+
+// section 15
+constexpr auto and_sign         = ascii_code_t {04};   // equivalent to 'and'
+constexpr auto not_sign         = ascii_code_t {05};   // equivalent to 'not'
+constexpr auto set_element_sign = ascii_code_t {06};   // equivalent to 'in'
+constexpr auto tab_mark         = ascii_code_t {011};  // ASCII code used as tab-skip
+constexpr auto line_feed        = ascii_code_t {012};  // ASCII code thrown away at end of line
+constexpr auto form_feed        = ascii_code_t {014};  // ASCII code used at end of page
+constexpr auto carriage_return  = ascii_code_t {015};  // ASCII code used at end of line
+constexpr auto left_arrow       = ascii_code_t {030};  // equivalent to ':='
+constexpr auto not_equal        = ascii_code_t {032};  // equivalent to '<>'
+constexpr auto less_or_equal    = ascii_code_t {034};  // equivalent to '<='
+constexpr auto greater_or_equal = ascii_code_t {035};  // equivalent to '>='
+constexpr auto equivalence_sign = ascii_code_t {036};  // equivalent to '=='
+constexpr auto or_sign          = ascii_code_t {037};  // equivalent to 'or'
+
+// section 18
+void
+initialize_xord ()
+{
+    for (int i = first_text_char; i <= last_text_char; ++i) { xord [i] = u8' '; }
+    for (auto i = 1; i <= 0377; ++i) { xord [xchr [i]] = i; }
+    xord [' '] = u8' ';
+}
+
+// section 19 nothing tbd
+
+// section 20
+// term_out is never used outside of this section directly, so we just don't use it
+
+/// Prints the format with arguments
+template <typename... Args>
+    requires (sizeof...(Args) > 0)
+void
+print (std::format_string<Args...> fmt, Args &&...args)
+{ std::print (fmt, std::forward<Args> (args)...); }
+
+void
+print (std::string_view str)
+{ std::print ("{}", str); }
+
+// Special version because this case happens so often
+void
+print (text_char ch)
+{ std::putchar (ch); }
+
+template <typename... Args>
+void
+print_ln (std::format_string<Args...> fmt, Args &&...args)
+{ std::println (fmt, std::forward<Args> (args)...); }
+
+void
+newline ()
+{ std::println (); }
+
+template <typename... Args>
+void
+print_nl (std::format_string<Args...> fmt, Args &&...args)
+{
+    newline ();
+    std::print (fmt, std::forward<Args> (args)...);
+}
+
+// section 21 nothing tbd
+
+// section 22
+void
+update_terminal ()
+{ std::fflush (stdout); }
+
+// section 23
+pascal::text_file web_file;
+pascal::text_file change_file;
+
+// section 24
+void
+open_input ()
+{
+    web_file.reset ();
+    change_file.reset ();
+}
+
+// section 25
+pascal::text_file pascal_file;
+pascal::text_file pool;
+
+// section 26
+void
+open_output ()
+{
+    pascal_file.rewrite ();
+    pool.rewrite ();
+}
+
+// section 27
+using buf_index_t = pascal::int_range<0, buf_size>;
+auto buffer       = pascal::array<buf_index_t, ascii_code_t> {};  /// The input line buffer. Holds valid
+                                                                  /// content from 0 to limit-1.
+
+// section 28
+
+// Declared in section 124 but we need them here already
+/// the last character position occupied in the buffer
+auto limit = buf_index_t {};
+auto loc   = buf_index_t {};  /// the next character position to be read from the buffer
+void
+error ();
+
+// Reads a line from the given file into the buffer array, converting characters to their ASCII codes
+// using xord. Returns true if a line was read, false if the end of the file was reached.
+bool
+input_ln (pascal::text_file &file)
+{
+    auto final_limit = buf_index_t {};  /// limit without trailing blanks
+    limit            = 0_r;
+
+    if (file.eof ())
+        return false;
+
+    while (!file.eol ())
+    {
+        buffer [limit] = xord [file.current ()];
+        file.get ();
+        ++limit;
+
+        if (buffer [limit - 1_r] != u8' ')
+        {
+            final_limit = limit;
+        }
+
+        // If input line is longer than buffer: discard all extra characters and signal error
+        if (limit == buf_size)
+        {
+            while (!file.eol ()) { file.get (); }
+            --limit;
+            if (final_limit > limit)
+            {
+                final_limit = limit;
+            }
+            print ("\n! Input line too long");
+            loc = 0_r;
+            error ();
+        }
+    }
+
+    file.read_line ();
+    limit = final_limit;
+    return true;
+}
+
+// section 29
+
+bool phase_one;
+
+// section 30 nothing tbd
+
+// section 31
+template <typename... Args>
+void
+err_print (std::format_string<Args...> fmt, Args &&...args)
+{
+    print_nl (fmt, std::forward<Args> (args)...);
+    error ();
+}
+
+void
+print_error_location_input ();
+void
+print_error_location_output ();
+
+void
+error ()
+{
+    if (phase_one)
+    {
+        print_error_location_input ();
+    }
+    else
+    {
+        print_error_location_output ();
+    }
+
+    update_terminal ();
+    mark_error ();
+}
+
+// section 32
+
+// defined in section 124 but needed here already
+
+///  if true, the current line is from change file
+bool changing = true;
+int  line     = 0;  /// the number of the current line in the current file
+
+void
+print_error_location_input ()
+{
+    if (changing)
+    {
+        print (". (change file ");
+    }
+    else
+    {
+        print (". (");
+    }
+    print_ln ("l.{})", line);
+
+    // print characters already read
+    auto l = std::min (loc, limit);
+    for (buf_index_t k = 0_r; k < l; ++k)
+    {
+        auto ch = buffer [k];
+        print (ch == tab_mark ? ' ' : xchr [ch]);
+    }
+    print_nl ("{:>{}}", "", int {l});
+
+    // print not yet read characters
+    for (auto k = l; k < limit; ++k)
+    {
+        auto ch = buffer [k];
+        print (xchr [ch]);
+    }
+    print (' ');
+}
+
+// section 33
+
+// defined in later section but needed here already
+using out_buf_ptr_t = pascal::int_range<0, out_buf_size>;
+auto out_buf        = pascal::array<out_buf_ptr_t, ascii_code_t> {};  /// assembled characters
+auto out_ptr        = out_buf_ptr_t {};  /// first available place in out buf
+
+void
+print_error_location_output ()
+{
+    print_ln (". (l.{})", line);
+    for (buf_index_t k = 0_r; k < out_ptr; ++k) { print (xchr [out_buf [k]]); }
+    print ("... ");
+}
+
+// section 34
+
+void
+jump_out ()
+{ exit (1); }
+
+template <typename... Args>
+void
+fatal_error (std::format_string<Args...> fmt, Args &&...args)
+{
+    print_nl (fmt, std::forward<Args> (args)...);
+    error ();
+    mark_fatal ();
+    jump_out ();
+}
+
+// section 35
+
+void
+confusion (std::string_view what)
+{ print ("! This can't happen ({})", what); }
+
+// section 36
+
+void
+overflow (std::string_view what)
+{ print ("! Sorry, {} capacity exceeded", what); }
+
+// section 37
+// We use uint8_t and uint16_t instead of eight_bits and sixteen_bits
+
+// section 38
+
+/// we multiply the byte capacity by approximately this amount
+auto constexpr ww     = 2_r;
+auto constexpr zz     = 3_r;  /// we multiply the token capacity by approximately this amount
+
+using name_pointer_t  = pascal::int_range<0, max_names>;  /// identifies a name
+using text_pointer_t  = pascal::int_range<0, max_texts>;
+using byte_pointer_t  = pascal::int_range<0, max_bytes>;
+using token_pointer_t = pascal::int_range<0, max_toks>;
+using token_bank_t    = pascal::int_range<0, zz - 1_r>;
+using byte_bank_t     = pascal::int_range<0, ww - 1_r>;
+using byte_mem_bank_t = pascal::array<byte_pointer_t, ascii_code_t>;
+
+auto byte_mem         = pascal::array<byte_bank_t, byte_mem_bank_t> {};  /// characters of names
+auto tok_mem = pascal::array<token_bank_t, pascal::array<token_pointer_t, ascii_code_t>> {};  /// tokens
+auto byte_start = pascal::array<name_pointer_t, uint16_t> {};  /// directory into byte mem
+auto tok_start  = pascal::array<text_pointer_t, uint16_t> {};  /// directory into tok mem
+auto link       = pascal::array<name_pointer_t, uint16_t> {};  /// hash table or tree links
+auto ilk        = pascal::array<name_pointer_t, uint16_t> {};  /// type codes or tree links
+auto equiv      = pascal::array<name_pointer_t, uint16_t> {};  /// info corresponding to names
+auto text_link  = pascal::array<text_pointer_t, uint16_t> {};  /// relates replacement texts
+
+auto
+locate_byte_mem (name_pointer_t p)
+{
+    auto w = p % ww;
+    return std::tuple<decltype (w), byte_mem_bank_t &, byte_pointer_t> {w, byte_mem [w], byte_start [p]};
+}
+
+// section 39
+
+/// length of a name
+auto
+length (name_pointer_t index)
+{ return byte_start [index + ww] - byte_start [index]; }
+
+// name_pointer is name_index_t and we needed to define it alreay in section 38
+
+// section 40
+
+/// first unused position in byte_start
+auto name_ptr   = name_pointer_t {1};
+auto string_ptr = name_pointer_t {256};  /// next number to be given to a string of length > 1
+auto byte_ptr   = pascal::array<byte_bank_t, byte_pointer_t> {};  /// first unused position in byte mem
+auto pool_check_sum = 271828;  /// sort of a hash for the whole string pool
+
+// section 41, 42, 43 not required (global arrays are zero-initialized in C++),
+// other initializers already given in section 40
+
+// section 44
+
+/// identifies a replacement text
+auto text_ptr = text_pointer_t {1};
+auto tok_ptr  = pascal::array<token_bank_t, token_pointer_t> {};  /// first unused position in tok_start
+auto z        = token_bank_t {1};                                 /// current segment of tok_mem
+
+// section 45, 46 not required
+
+// section 47
+
+enum ilk_value
+{
+    normal,     /// ordinary identifiers
+    numeric,    /// numeric macros and strings
+    simple,     /// simple macros
+    parametric  /// parametric macros
+};
+
+// section 48
+/// left link in binary search tree for module names
+auto &llink = link;
+auto &rlink = ilk;  /// right link in binary search tree for module names
+
+// section 49
+
+void
+print_id (name_pointer_t p)
+{
+    if (p >= name_ptr) [[unlikely]]
+    {
+        print ("IMPOSSIBLE");
+    }
+    else
+    {
+        const auto end = byte_start [p + ww];
+        for (auto [_, bank, k] = locate_byte_mem (p); k < end; ++k) { print (xchr [bank [k]]); }
+    }
+}
+
+// section 50
+using hash_index_t    = pascal::int_range<0, hash_size>;
+using chopped_index_t = pascal::int_range<0, unambig_length>;
+
+auto id_first         = buf_index_t {};
+auto id_loc           = buf_index_t {};
+auto double_chars     = buf_index_t {};
+auto hash             = pascal::array<hash_index_t, uint16_t> {};
+auto chop_hash        = pascal::array<hash_index_t, uint16_t> {};
+auto chopped_id       = pascal::array<chopped_index_t, ascii_code_t> {};
+
+/// convenience function because this value is used very often
+auto
+id_length ()
+{ return id_loc - id_first; }
+
+// section 51, 52 not required
+
+// section 53
+
+auto
+compute_hash_code () -> hash_index_t;
+auto
+compute_name_location (hash_index_t h) -> name_pointer_t;
+void
+update_tables (name_pointer_t p, ilk_value t);
+
+/// Finds current identifier if it exists or stores it.
+auto
+id_lookup (ilk_value t) -> name_pointer_t
+{
+    hash_index_t   h = compute_hash_code ();
+    name_pointer_t p = compute_name_location (h);
+
+    if (p == name_ptr || t != normal)
+    {
+        update_tables (p, t);
+    }
+
+    return p;
+}
+
+// section 54
+
+/// computes the hash of the current id
+auto
+compute_hash_code () -> hash_index_t
+{
+    auto h = hash_index_t {static_cast<uint8_t> (buffer [id_first])};
+    for (auto i = buf_index_t {id_first + 1}; i < id_loc; ++i)
+    {
+        h = hash_index_t {(h + h + buffer [i]) % hash_size};
+    };
+    return h;
+}
+
+// section 55
+
+auto
+compare_with_current_identifier (name_pointer_t p) -> bool;
+
+/// Finds the index of the current id (in buffer) into byte_start.
+///
+/// The hash list is implemented by storing the start of each bucket in hash
+/// and the linked list for each bucket implicitly in link[p] (there must be
+/// at most one successor for each p)
+auto
+compute_name_location (hash_index_t h) -> name_pointer_t
+{
+    auto p   = name_pointer_t {hash [h]};
+    auto len = id_length ();
+    while (p != 0)
+    {
+        if (length (p) == len && compare_with_current_identifier (p))
+            return p;
+
+        p = name_pointer_t {link [p]};
+    }
+    p = name_ptr;
+
+    // insert p at beginning of hash list
+    link [p] = hash [h];
+    hash [h] = p;
+
+    return p;
+}
+
+// section 56
+
+auto
+compare_with_current_identifier (name_pointer_t p) -> bool
+{
+    auto [_, bank, k] = locate_byte_mem (p);
+    return std::memcmp (&buffer [id_first], &bank [k], id_length ()) == 0;
+}
+
+// section 57
+
+auto
+compute_secondary_hash () -> hash_index_t;
+void
+double_definition_error (name_pointer_t p, ilk_value t, hash_index_t h);
+void
+add_new_name (name_pointer_t p, ilk_value t, hash_index_t h);
+
+/// Update the tables and check for possible errors
+void
+update_tables (name_pointer_t p, ilk_value t)
+{
+    hash_index_t h = 0_r;
+
+    if ((p != name_ptr && t != normal && ilk [p] == normal)
+        || (p == name_ptr && t == normal && buffer [id_first] != u8'"'))
+    {
+        h = compute_secondary_hash ();
+    }
+
+    if (p != name_ptr)
+    {
+        double_definition_error (p, t, h);
+    }
+    else
+    {
+        add_new_name (p, t, h);
+    }
+}
+
+// section 58
+
+/// Computes secondary hash and sets chopped_id to the chopped id
+auto
+compute_secondary_hash () -> hash_index_t
+{
+    chopped_index_t s = 0_r;
+    hash_index_t    h = 0_r;
+    for (auto i = id_first; i < id_loc; ++i)
+    {
+        if (s == unambig_length)
+            break;
+
+        auto ch = buffer [i];
+
+        if (ch == u8'_')
+            continue;
+
+        if (ch >= u8'a')
+        {
+            ch -= 040;
+        }
+
+        chopped_id [s] = ch;
+        h              = hash_index_t {(h + h + ch) % hash_size};
+        ++s;
+    }
+    chopped_id [s] = 0;
+
+    return h;
+}
+
+// section 59
+
+void
+remove_from_secondary_hash_table (name_pointer_t p, hash_index_t h);
+
+void
+double_definition_error (name_pointer_t p, ilk_value t, hash_index_t h)
+{
+    if (ilk [p] == normal)  // We have seen p before it was used
+    {
+        if (t == numeric)  // We don't allow numeric macros to be defined after their first use
+        {
+            err_print ("! This identifier has already appeared");
+
+            // nevertheless we treat it as numeric from now on
+            // numeric macros are not stored in secondary hash table
+            remove_from_secondary_hash_table (p, h);
+        }
+
+        // We only make it a message for numeric because it might break the internal math
+        // All other cases are not problematic
+    }
+    else
+    {
+        err_print ("! This identifier was defined before");
+    }
+
+    // the second definition wins: we force a new ilk on p
+    ilk [p] = t;
+}
+
+// section 60
+
+void
+remove_from_secondary_hash_table (name_pointer_t p, hash_index_t h)
+{
+    auto q = name_pointer_t {chop_hash [h]};
+    if (q == p)
+    {
+        chop_hash [h] = equiv [p];
+    }
+    else
+    {
+        while (equiv [q] != p) { q = name_pointer_t {equiv [q]}; }
+        equiv [q] = equiv [p];
+    }
+}
+
+// section 61
+
+void
+update_secondary_hash (name_pointer_t p, hash_index_t h);
+void
+add_new_string (name_pointer_t p);
+
+void
+add_new_name (name_pointer_t p, ilk_value t, hash_index_t h)
+{
+    auto first_char = buffer [id_first];
+
+    if (t == normal && first_char != u8'"')
+    {
+        update_secondary_hash (p, h);
+    }
+
+    auto [w, bank, _] = locate_byte_mem (name_ptr);
+    auto k            = byte_ptr [w];
+    auto length       = id_length ();
+    auto k_final      = k + length;
+
+    if (k_final > max_bytes)
+        overflow ("byte memory");
+
+    if (name_ptr > max_names - ww)
+        overflow ("name");
+
+    std::memcpy (&bank [k], &buffer [id_first], length);
+
+    byte_ptr [w]               = k_final;
+    byte_start [name_ptr + ww] = k_final;
+    ++name_ptr;
+
+    if (first_char != u8'"')
+    {
+        ilk [p] = t;
+    }
+    else
+    {
+        add_new_string (p);
+    }
+}
+
+// section 62
+void
+check_conflicting_names (name_pointer_t q);
+
+void
+update_secondary_hash (name_pointer_t p, hash_index_t h)
+{
+    auto q = name_pointer_t {chop_hash [h]};
+    while (q != 0)
+    {
+        check_conflicting_names (q);
+        q = name_pointer_t {equiv [q]};
+    }
+
+    // put p at front of secondary hash list
+    equiv [p]     = chop_hash [h];
+    chop_hash [h] = p;
+}
+
+// section 63
+
+/// Checks whether name indicated by q has same chopped id as the the value in chopped_id
+void
+check_conflicting_names (name_pointer_t q)
+{
+    chopped_index_t s     = 0_r;
+
+    auto            end   = byte_pointer_t {byte_start [q + ww]};
+    auto [_, bank, start] = locate_byte_mem (q);
+
+    auto k                = start;
+    for (; k < end; ++k)
+    {
+        if (s == unambig_length)
+            break;
+
+        auto ch = bank [k];
+        if (ch == u8'_')
+            continue;
+
+        if (ch >= u8'a')
+        {
+            ch -= 040;
+        }
+
+        if (chopped_id [s] != ch)
+            return;
+
+        ++s;
+    }
+
+    if (k == end && chopped_id [s] != 0)
+        return;
+
+    print_nl ("! Identifier conflict with ");
+    for (k = start; k < end; ++k) { print (xchr [bank [k]]); }
+    error ();
+}
+
+// section 64
+
+constexpr auto checksum_prime = (1 << 29) - 73;
+
+void
+add_to_checksum (int value)
+{
+    pool_check_sum += pool_check_sum + value;
+    while (pool_check_sum > checksum_prime) { pool_check_sum -= checksum_prime; }
+}
+
+void
+add_new_string (name_pointer_t p)
+{
+    ilk [p]     = numeric;
+    auto length = id_length ();
+
+    if (length - double_chars == 2)  // single-character string
+    {
+        equiv [p] = buffer [id_first + 1_r] + 0100000;
+    }
+    else
+    {
+        equiv [p] = string_ptr + 0100000;
+        length -= (double_chars + 1_r);
+        if (length > 99)
+        {
+            err_print ("! Preprocessed string is too long");
+        }
+        ++string_ptr;
+
+        // output length
+        pool.write (xchr [u8'0' + length / 10]);
+        pool.write (xchr [u8'0' + length % 10]);
+
+        add_to_checksum (length);
+
+        auto i = buf_index_t {id_first + 1};
+        while (i < id_loc)
+        {
+            auto ch = buffer [i];
+            pool.write (xchr [ch]);
+            add_to_checksum (ch);
+            if (ch == u8'"' || ch == u8'@')
+            {
+                i += 2_r;  // omit second appearance of doubled character
+            }
+            else
+            {
+                ++i;
+            }
+        }
+        pool.write_line ();
+    }
+}
+
+// section 65
+
+/// Index in one name
+using inname_index_t = pascal::int_range<0, longest_name>;
+auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name being sought for
+
+// section 66
+
+enum comparison_result
+{
+    less,
+    equal,
+    greater,
+    prefix,
+    extension
+};
+
+auto
+compare_module_names (uint16_t length, name_pointer_t p) -> comparison_result;
+auto
+add_module_name (uint16_t length, comparison_result &c, name_pointer_t q) -> name_pointer_t;
+
+auto
+module_lookup (uint16_t length) -> name_pointer_t
+{
+    auto c = greater;
+    auto q = name_pointer_t {0};
+    auto p = name_pointer_t {rlink [0_r]};
+
+    while (p != 0)
+    {
+        c = compare_module_names (length, p);
+        q = p;
+        if (c == less)
+        {
+            p = name_pointer_t {llink [q]};
+        }
+        else if (c == greater)
+        {
+            p = name_pointer_t {rlink [q]};
+        }
+        else
+        {
+            if (c != equal)
+            {
+                err_print ("! Incompatible section names");
+                return 0_r;
+            }
+            return p;
+        }
+    }
+
+    return add_module_name (length, c, q);
+}
+
+// section 67
+
+auto
+add_module_name (uint16_t length, comparison_result &c, name_pointer_t q) -> name_pointer_t
+{
+    auto [w, bank, _] = locate_byte_mem (name_ptr);
+    auto k            = byte_ptr [w];
+    auto k_final      = byte_pointer_t {k + length};
+
+    if (k_final > max_bytes)
+        overflow ("byte memory");
+
+    if (name_ptr > max_names - ww)
+        overflow ("name");
+
+    auto p = name_ptr;
+    if (c == less)
+    {
+        llink [q] = p;
+    }
+    else
+    {
+        rlink [q] = p;
+    }
+
+    llink [p] = 0;
+    rlink [p] = 0;
+
+    c         = equal;
+    equiv [p] = 0;
+
+    std::memcpy (&bank [k], &mod_text [1_r], length);
+    byte_ptr [w]               = k_final;
+    byte_start [name_ptr + ww] = k_final;
+    ++name_ptr;
+
+    return p;
+}
+
+// section 68
+
+auto
+compare_module_names (uint16_t length, name_pointer_t p) -> comparison_result
+{
+    comparison_result c   = equal;
+    inname_index_t    j   = 1_r;
+
+    uint16_t          end = byte_start [p + ww];
+    auto [_, bank, k]     = locate_byte_mem (p);
+
+    while (k < end && j <= length && mod_text [j] == bank [k])
+    {
+        ++k;
+        ++j;
+    }
+
+    if (k == end)
+        return j > length ? equal : extension;
+
+    if (j > length)
+        return prefix;
+
+    if (mod_text [j] < bank [k])
+        return less;
+
+    return greater;
+}
+
+// section 69
+
+auto
+prefix_lookup (uint16_t length) -> name_pointer_t
+{
+    auto resume_node  = name_pointer_t {0};
+    auto current_node = name_pointer_t {rlink [0_r]};
+    auto count        = name_pointer_t {0};
+    auto result       = name_pointer_t {0};
+
+    while (current_node != 0)
+    {
+        auto c = compare_module_names (length, current_node);
+        if (c == less)
+        {
+            current_node = name_pointer_t {llink [current_node]};
+        }
+        else if (c == greater)
+        {
+            current_node = name_pointer_t {rlink [current_node]};
+        }
+        else
+        {
+            result = current_node;
+            ++count;
+            resume_node  = name_pointer_t {rlink [current_node]};
+            current_node = name_pointer_t {llink [current_node]};
+        }
+
+        if (current_node == 0)
+        {
+            current_node = resume_node;
+            resume_node  = 0_r;
+        }
+    }
+
+    if (count != 1_r)
+    {
+        if (count == 0_r)
+        {
+            err_print ("! Name does not match");
+        }
+        else
+        {
+            err_print ("! Ambiguous prefix");
+        }
+    }
+
+    return result;
+}
+
+// section 70
+
+/// final text_link in module replacement texts
+auto module_flag  = static_cast<uint16_t> (max_texts);
+auto last_unnamed = text_pointer_t {0};  /// most recent replacement text of unnamed module
+
+// section 71 not required
+
+// section 72
+
+/// insertion of parameter
+constexpr auto param         = ascii_code_t {0};
+constexpr auto verbatim      = ascii_code_t {2};     /// @= begins a verbatim Pascal string, @> ends it
+constexpr auto force_line    = ascii_code_t {3};     /// @\ forces a new line in the Pascal output
+constexpr auto begin_comment = ascii_code_t {011};   /// @{ turns into { or [. in output
+constexpr auto end_comment   = ascii_code_t {012};   /// @} turns into } or .] in output
+constexpr auto octal         = ascii_code_t {014};   /// @' precedes an octal constant
+constexpr auto hex           = ascii_code_t {015};   /// @" preceds a hex constant
+constexpr auto double_dot    = ascii_code_t {040};   /// denotes .. in Pascal
+constexpr auto check_sum     = ascii_code_t {0175};  /// @$ denotes the string pool check sum
+constexpr auto join          = ascii_code_t {0177};  /// @& is the item concatenation operator
+
+// section 73
+
+/// stores high byte, then low byte in tok_mem
+void
+store_two_bytes (uint16_t x)
+{
+    if (tok_ptr [z] + 2_r > max_toks)
+        overflow ("token");
+
+    tok_mem [z][tok_ptr [z]]       = x >> 8;
+    tok_mem [z][tok_ptr [z] + 1_r] = x & 0xFF;
+
+    tok_ptr [z] += 2_r;
+}
+
+// section 74, 75, 76 implement print_repl for debug mode if that gets included
+// section 77 nothing tbd
+// section 78
+
+using mod_pointer_t = pascal::int_range<0, max_modules>;
+
+struct output_state
+{
+    uint16_t       end_field;   /// ending location of replacement text
+    uint16_t       byte_field;  /// present location within replacement text
+    name_pointer_t name_field;  /// byte_start index for text being output
+    text_pointer_t repl_field;  /// tok_start index for text being output
+    mod_pointer_t  mod_field;   /// module number or zero if not a module
+};
+
+// section 79
+
+/// current output state
+auto  cur_state = output_state {};
+
+auto &cur_end   = cur_state.end_field;   /// current ending location in tok mem
+auto &cur_byte  = cur_state.byte_field;  /// location of next output byte in tok mem
+auto &cur_name  = cur_state.name_field;  /// pointer to current name being expanded
+auto &cur_repl  = cur_state.repl_field;  /// pointer to current replacement text
+auto &cur_mod   = cur_state.mod_field;   /// current module number being expanded
+
+auto  stack     = pascal::int_range_array<1, stack_size, output_state> {};
+auto  stack_ptr = pascal::int_range<0, stack_size> {};
+
+/// section 80
+
+auto zo = token_bank_t {};
+
+// section 81 nothing tbd
+// section 82
+
+auto brace_level = uint8_t {};  /// current depth of @{...@} nesting
+
+// section 83
+
+void
+initialize_output_stacks ()
+{
+    stack_ptr   = 1_r;
+    brace_level = 0_r;
+    cur_name    = 0_r;
+    cur_repl    = text_pointer_t {text_link [0_r]};
+
+    // Fix: Intercept Knuth's deliberate out-of-bounds sentinel check safely
+    if (cur_repl == module_flag)
+    {
+        zo       = 0_r;
+        cur_byte = 0;
+        cur_end  = 0;
+    }
+    else
+    {
+        zo       = cur_repl % zz;
+        cur_byte = tok_start [cur_repl];
+        cur_end  = tok_start [cur_repl + zz];
+    }
+
+    cur_mod = 0_r;
+}
+
+// section 84
+
+/// suspends the current level
+void
+push_level (name_pointer_t p)
+{
+    if (stack_ptr == stack_size)
+        overflow ("stack");
+
+    stack [stack_ptr++] = cur_state;
+    cur_name            = p;
+    cur_repl            = text_pointer_t {equiv [p]};
+    zo                  = cur_repl % zz;
+    cur_byte            = tok_start [cur_repl];
+    cur_end             = tok_start [cur_repl + zz];
+
+    if (cur_repl == module_flag)
+    {
+        zo       = 0_r;
+        cur_byte = 0;
+        cur_end  = 0;
+    }
+    else
+    {
+        zo       = cur_repl % zz;
+        cur_byte = tok_start [cur_repl];
+        cur_end  = tok_start [cur_repl + zz];
+    }
+
+    cur_mod = 0_r;
+}
+
+// section 85
+
+void
+pop_parameter_stack ();
+
+/// do this when cur_byte reaches cur_end
+void
+pop_level ()
+{
+    auto repl = text_pointer_t {text_link [cur_repl]};
+    if (repl == 0)  // end of macro expansion
+    {
+        if (ilk [cur_name] == parametric)
+        {
+            pop_parameter_stack ();
+        }
+    }
+    else if (repl < module_flag)  // link to a continuation
+    {
+        cur_repl = repl;  // stay on same level
+        zo       = cur_repl % zz;
+        cur_byte = tok_start [cur_repl];
+        cur_end  = tok_start [cur_repl + zz];
+        return;
+    }
+
+    if (--stack_ptr > 0)  // go down to previous level
+    {
+        cur_state = stack [stack_ptr];
+        zo        = cur_repl % zz;
+    }
+}
+
+// section 86
+
+constexpr auto number        = 0200;  /// code returned by get output when next output is numeric
+constexpr auto module_number = 0201;  ///  code returned by get output for module numbers
+constexpr auto identifier    = 0202;  /// code returned by get output for identifiers
+
+int            cur_val;  /// additional information corresponding to output token
+
+// section 87, 88, 89, 90, 92
+
+void
+copy_parameter_to_tok_mem ();
+
+/// returns next token after macro expansion
+uint16_t
+get_output ()
+{
+    while (true)  // because we need to restart once in a while
+    {
+        if (stack_ptr == 0)
+            return 0;
+
+        if (cur_byte == cur_end)
+        {
+            cur_val = -cur_mod;
+            pop_level ();
+            if (cur_val == 0)
+                continue;
+
+            return module_number;
+        }
+
+        uint16_t a = tok_mem [zo][token_pointer_t {cur_byte++}];
+
+        if (a < 0200)  // one-byte token
+        {
+            if (a != param)
+                return a;
+
+            // section 92
+            // start scanning current macro parameter
+            push_level (name_ptr - 1_r);
+            continue;
+        }
+
+        a = (a - 0200) << 8 | tok_mem [zo][token_pointer_t {cur_byte++}];
+
+        if (a < 024000)  // (0250 - 0200) * 0400
+        {
+            auto an = name_pointer_t {a};
+
+            // section 89
+
+            switch (ilk [an])
+            {
+            case normal : cur_val = an; return identifier;
+
+            case numeric: cur_val = equiv [an] - 0100000; return number;
+
+            case simple : push_level (an); continue;
+
+            case parametric:
+            {
+                // section 90
+
+                while (cur_byte == cur_end && stack_ptr > 0) { pop_level (); }
+
+                if (stack_ptr == 0 || tok_mem [zo][token_pointer_t {cur_byte}] != u8'(')
+                {
+                    print_nl ("! No parameter given for ");
+                    print_id (an);
+                    error ();
+                    continue;
+                }
+
+                copy_parameter_to_tok_mem ();
+
+                equiv [name_ptr] = text_ptr;
+                ilk [name_ptr]   = simple;
+                auto w           = name_ptr % ww;
+                auto k           = byte_ptr [w];
+
+                if (name_ptr > max_names - ww)
+                    overflow ("name");
+
+                byte_start [name_ptr + ww] = k;
+                ++name_ptr;
+
+                if (text_ptr > max_texts - zz)
+                    overflow ("text");
+
+                text_link [text_ptr]      = 0;
+                tok_start [text_ptr + zz] = tok_ptr [z];
+                ++text_ptr;
+                z = text_ptr % zz;
+
+                push_level (an);
+                continue;
+            }
+
+            default: confusion ("output");
+            }
+        }
+
+        if (a < 050000)
+        {
+            // section 88
+
+            a -= 024000;
+            auto an = name_pointer_t {a};
+            if (equiv [an] != 0)
+            {
+                push_level (an);
+            }
+            else if (an != 0)
+            {
+                print_nl ("! Not present: <");
+                print_id (an);
+                print ('>');
+                error ();
+            }
+            continue;
+        }
+
+        cur_val = a - 050000;
+        a       = module_number;
+        cur_mod = mod_pointer_t {cur_val};
+        return a;
+    }
+}
+
+// section 91
+
+void
+pop_parameter_stack ()
+{
+    --name_ptr;
+    --text_ptr;
+    z           = text_ptr % zz;
+    tok_ptr [z] = token_pointer_t {tok_start [text_ptr]};
+}
+
+// section 93
+
+/// append replacement text
+void
+app_repl (uint8_t b)
+{
+    auto first_free = tok_ptr [z];
+    if (first_free == max_toks)
+        overflow ("token");
+
+    tok_mem [z][first_free] = b;
+    tok_ptr [z]             = first_free + 1_r;
+}
+
+/// .
+void
+copy_parameter_to_tok_mem ()
+{
+    uint16_t balance = 1;  /// excess of ( versus ) while copying a parameter
+    ++cur_byte;
+    while (true)
+    {
+        uint8_t b = tok_mem [zo][token_pointer_t {cur_byte++}];
+        if (b == param)
+        {
+            store_two_bytes (name_ptr + 077777);
+        }
+        else
+        {
+            if (b >= 0200)
+            {
+                app_repl (b);
+                b = tok_mem [zo][token_pointer_t {cur_byte++}];
+            }
+            else
+            {
+                switch (b)
+                {
+                case u8'(': ++balance; break;
+
+                case u8')':
+                    if (--balance == 0)
+                        return;
+                    break;
+
+                case u8'\'':
+                    do
+                    {
+                        app_repl (b);
+                        b = tok_mem [zo][token_pointer_t {cur_byte++}];
+                    }
+                    while (b != u8'\'');  // copy string, don't change balance
+                    break;
+                }
+            }
+            app_repl (b);
+        }
+    }
+}
+
+// section 94
+
+/// last breaking place in out_buf
+auto break_ptr = out_buf_ptr_t {};
+auto semi_ptr  = out_buf_ptr_t {};  /// last semicolon breaking place in out_buf
+
+// section 95
+
+/// state associated with special characters
+constexpr uint8_t misc          = 0;
+constexpr uint8_t num_or_id     = 1;                 /// state associated with numbers and identifiers
+constexpr uint8_t sign          = 2;                 /// state associated with pending + or −
+constexpr uint8_t sign_val      = num_or_id + 2;     /// state associated with pending sign and value
+constexpr uint8_t sign_val_sign = sign + 2;          /// sign val followed by another pending sign
+constexpr uint8_t sign_val_val  = sign_val + 2;      /// sign val followed by another pending value
+constexpr uint8_t unbreakable   = sign_val_val + 1;  /// state associated with @&
+
+auto              out_state     = misc;             /// current status of partial output
+auto              out_val       = 0;                /// pending values
+auto              out_app       = 0;                /// pending values
+auto              out_sign      = ascii_code_t {};  /// sign to use if appending out_val >= 0
+using sign_t                    = pascal::int_range<-1, 1>;
+auto last_sign                  = sign_t {};  /// sign to use if appending a zero
+
+// section 96
+
+void
+initialize_output_buffer ()
+{
+    out_state     = misc;
+    out_ptr       = 0_r;
+    break_ptr     = 0_r;
+    semi_ptr      = 0_r;
+    out_buf [0_r] = 0;
+    line          = 1;
+}
+
+// section 97
+
+/// writes one line to output file
+void
+flush_buffer ()
+{
+    auto last_break_ptr = break_ptr;
+
+    if (semi_ptr != 0 && out_ptr - semi_ptr <= line_length)
+    {
+        break_ptr = semi_ptr;
+    }
+
+    for (out_buf_ptr_t k = 0_r; k < break_ptr; ++k) { pascal_file.write (xchr [out_buf [k]]); }
+    pascal_file.write_line ();
+    ++line;
+
+    if (line % 100 == 0)
+    {
+        print ('.');
+        if (line % 500 == 0)
+        {
+            print ("{}", line);
+        }
+        update_terminal ();
+    }
+
+    if (break_ptr < out_ptr)
+    {
+        if (out_buf [break_ptr] == u8' ')
+        {
+            // drop space at break
+            if (++break_ptr > last_break_ptr)
+            {
+                last_break_ptr = break_ptr;
+            }
+        }
+
+        // shift remaining line to front
+        for (auto k = break_ptr; k < out_ptr; ++k) { out_buf [k - break_ptr] = out_buf [k]; }
+    }
+
+    out_ptr -= break_ptr;
+    break_ptr = last_break_ptr - break_ptr;
+    semi_ptr  = 0_r;
+
+    if (out_ptr > line_length)
+    {
+        err_print ("! Long line must be truncated");
+        out_ptr = out_buf_ptr_t {line_length};
+    }
+}
+
+void
+check_break ()
+{
+    if (out_ptr > line_length)
+    {
+        flush_buffer ();
+    }
+}
+
+// section 98
+
+void
+empty_last_line_from_buffer ()
+{
+    break_ptr = out_ptr;
+    semi_ptr  = 0_r;
+    flush_buffer ();
+    if (brace_level != 0)
+    {
+        err_print ("! Program ended at brace level {}", brace_level);
+    }
+}
+
+// section 99
+
+/// appends a character to out_buf
+void
+app (ascii_code_t ch)
+{ out_buf [out_ptr++] = ch; }
+
+/// appends value to out_buf
+void
+app_val (int v)
+{
+    //  first we put the digits at the very end of out_buf
+    auto k = out_buf_ptr_t {out_buf_size};
+    do
+    {
+        auto [quot, rem] = std::div (v, 10);
+        v                = quot;
+        out_buf [k]      = rem;
+        --k;
+    }
+    while (v != 0);
+
+    do
+    {
+        ++k;
+        app (out_buf [k] + u8'0');
+    }
+    while (k < out_buf_size);
+}
+
+// section 100
+
+constexpr auto str   = 1;  /// send_out code for a string
+constexpr auto ident = 2;  /// send_out code for an identifier
+constexpr auto frac  = 3;  /// send_out code for a fraction
+
+using line_ptr_t     = pascal::int_range<1, line_length>;
+auto out_contrib     = pascal::array<line_ptr_t, ascii_code_t> {};  /// a contribution to out_buf
+
+// section 101
+
+void
+prepare_buffer_for_append (uint8_t type, uint16_t v);
+
+// outputs v elements of type type
+void
+send_out (uint8_t type, uint16_t v)
+{
+    prepare_buffer_for_append (type, v);
+
+    if (type != misc)
+    {
+        for (line_ptr_t k = 1_r; k <= v; ++k) { app (out_contrib [k]); }
+    }
+    else
+    {
+        app (v & 0xFF);
+    }
+
+    check_break ();
+
+    if (type == misc && (v == u8';' || v == u8'}'))
+    {
+        semi_ptr  = out_ptr;
+        break_ptr = out_ptr;
+    }
+
+    out_state = (type >= ident ? num_or_id : misc);
+}
+
+// section 102
+
+void
+append_out_val_to_buffer ();
+void
+reduce_sign_val_val (uint8_t type, uint16_t v);
+
+void
+prepare_buffer_for_append (uint8_t type, uint16_t v)
+{
+    while (true)
+    {
+        switch (out_state)
+        {
+        case num_or_id:
+            if (type != frac)
+            {
+                break_ptr = out_ptr;
+                if (type == ident)
+                {
+                    app (u8' ');
+                }
+            }
+            return;
+
+        case sign:
+            app (u8',' - out_app);
+            check_break ();
+            break_ptr = out_ptr;
+            return;
+
+        case sign_val:
+        case sign_val_sign:
+            append_out_val_to_buffer ();
+            out_state -= 2;
+            continue;
+
+        case sign_val_val:
+            reduce_sign_val_val (type, v);
+            out_state = sign_val;
+            continue;
+
+        case misc:
+            if (type != frac)
+            {
+                break_ptr = out_ptr;
+            }
+            return;
+
+        default: return;
+        }
+    }
+}
+
+// section 103
+
+void
+append_out_val_to_buffer ()
+{
+    if (out_val < 0 || (out_val == 0 && last_sign < 0))
+    {
+        app (u8'-');
+    }
+    else if (out_sign > 0)
+    {
+        app (out_sign);
+    }
+    app_val (std::abs (out_val));
+    check_break ();
+}
+
+// section 104
+
+bool
+contribution_is_mult_div_mod (uint8_t type, uint16_t v);
+
+void
+reduce_sign_val_val (uint8_t type, uint16_t v)
+{
+    if (type == frac || contribution_is_mult_div_mod (type, v))
+    {
+        append_out_val_to_buffer ();
+        out_sign = u8'+';
+        out_val  = out_app;
+    }
+    else
+    {
+        out_val += out_app;
+    }
+}
+
+// section 105
+
+bool
+out_contrib_is (ascii_code_t a, ascii_code_t b, ascii_code_t c)
+{ return out_contrib [1_r] == a && out_contrib [2_r] == b && out_contrib [3_r] == c; }
+
+bool
+contribution_is_mult_div_mod (uint8_t type, uint16_t v)
+{
+    return (type == ident
+            && v == 3
+            && (out_contrib_is (u8'D', u8'I', u8'V') || out_contrib_is (u8'M', u8'O', u8'D')))
+        || (type == misc && (v == u8'*' || v == u8'/'));
+}
+
+// section 106
+
+void
+send_sign (int v)
+{
+    switch (out_state)
+    {
+    case sign:
+    case sign_val_sign: out_app *= v; break;
+
+    case sign_val:
+        out_app   = v;
+        out_state = sign_val_sign;
+        break;
+
+    case sign_val_val:
+        out_val += out_app;
+        out_app   = v;
+        out_state = sign_val_sign;
+        break;
+
+    default:
+        break_ptr = out_ptr;
+        out_app   = v;
+        out_state = sign;
+        break;
+    }
+
+    last_sign = sign_t {out_app};
+}
+
+// section 107, 108
+bool
+previous_output_was_mult_or_div ();
+bool
+previous_output_was_div_or_mod ();
+void
+append_decimal (int v);
+
+void
+send_val (int v)
+{
+    switch (out_state)
+    {
+    case num_or_id:
+        if (previous_output_was_div_or_mod ())
+            break;
+
+        out_sign  = u8' ';
+        out_state = sign_val;
+        out_val   = v;
+        break_ptr = out_ptr;
+        last_sign = 1_r;
+        return;
+
+    case misc:
+        if (previous_output_was_mult_or_div ())
+            break;
+
+        out_sign  = 0;
+        out_state = sign_val;
+        out_val   = v;
+        break_ptr = out_ptr;
+        last_sign = 1_r;
+        return;
+
+    case sign:
+        out_sign  = u8'+';
+        out_state = sign_val;
+        out_val   = out_app * v;
+        return;
+
+    case sign_val:
+        out_state = sign_val_val;
+        out_app   = v;
+        err_print ("! Two numbers occurred without a sign between them");
+        return;
+
+    case sign_val_sign:
+        out_state = sign_val_val;
+        out_app *= v;
+        return;
+
+    case sign_val_val:
+        out_val += out_app;
+        out_app = v;
+        err_print ("! Two numbers occurred without a sign between them");
+        return;
+
+    default: break;
+    }
+
+    append_decimal (v);
+}
+
+// section 109
+
+bool
+previous_output_was_mult_or_div ()
+{
+    auto ch = out_buf [break_ptr];
+    return out_ptr == break_ptr + 1_r && (ch == u8'*' || ch == u8'/');
+}
+
+// section 110
+
+bool
+out_buf_was (ascii_code_t a, ascii_code_t b, ascii_code_t c)
+{ return out_buf [out_ptr - 3_r] == a && out_buf [out_ptr - 2_r] == b && out_buf [out_ptr - 1_r] == c; }
+
+bool
+previous_output_was_div_or_mod ()
+{
+    auto ch = out_buf [break_ptr];
+    return (out_ptr == break_ptr + 3_r || (out_ptr == break_ptr + 4_r && out_buf [break_ptr] == u8' '))
+        && (out_buf_was (u8'D', u8'I', u8'V') || out_buf_was (u8'M', u8'O', u8'D'));
+}
+
+// section 111
+
+void
+append_decimal (int v)
+{
+    if (v >= 0)
+    {
+        if (out_state == num_or_id)
+        {
+            break_ptr = out_ptr;
+            app (u8' ');
+        }
+        app_val (v);
+        check_break ();
+        out_state = num_or_id;
+    }
+    else
+    {
+        app (u8'(');
+        app (u8'-');
+        app_val (-v);
+        app (u8')');
+        check_break ();
+        out_state = misc;
+    }
+}
+
+// section 112
+
+void
+send_the_output ();
+
+void
+output_compressed_tables ()
+{
+    if (text_link [0_r] == 0_r)
+    {
+        print_nl ("! No output was specified.");
+        mark_harmless ();
+    }
+    else
+    {
+        print_nl ("Writing the output file");
+        update_terminal ();
+        initialize_output_stacks ();
+        initialize_output_buffer ();
+        send_the_output ();
+        empty_last_line_from_buffer ();
+        print_nl ("Done.");
+    }
+}
+
+// section 113
+
+enum class send_output_cases
+{
+    not_consumed,
+    consumed,
+    get_fraction,
+    reswitch
+};
+
+auto
+send_output_identifier (ascii_code_t cur_char) -> bool;
+auto
+send_output_constant (ascii_code_t &cur_char, pascal::int_range<0, line_length> &k) -> send_output_cases;
+auto
+send_output_operator (ascii_code_t cur_char) -> bool;
+auto
+send_output_brace_case (ascii_code_t cur_char) -> bool;
+void
+send_output_string ();
+void
+send_output_verbatim_string ();
+void
+force_line_break ();
+void
+finish_real_constant (ascii_code_t &cur_char, pascal::int_range<0, line_length> &k);
+
+void
+send_output_one_char (ascii_code_t cur_char)
+{
+    pascal::int_range<0, line_length> k;
+    while (true)
+    {
+        if (send_output_identifier (cur_char))
+            return;
+
+        switch (send_output_constant (cur_char, k))
+        {
+        case send_output_cases::not_consumed: break;
+
+        case send_output_cases::consumed    : return;
+
+        case send_output_cases::get_fraction: finish_real_constant (cur_char, k); continue;
+
+        case send_output_cases::reswitch    : continue;
+        }
+
+        if (send_output_operator (cur_char))
+            return;
+
+        // section 115
+        // other printable characters
+        switch (cur_char)
+        {
+        case u8'!':
+        case u8'"':
+        case u8'#':
+        case u8'$':
+        case u8'%':
+        case u8'&':
+        case u8'(':
+        case u8')':
+        case u8'*':
+        case u8',':
+        case u8'/':
+        case u8':':
+        case u8';':
+        case u8'<':
+        case u8'=':
+        case u8'>':
+        case u8'?':
+        case u8'@':
+        case u8'[':
+        case u8'\\':
+        case u8']':
+        case u8'^':
+        case u8'_':
+        case u8'`':
+        case u8'{':
+        case u8'|' : send_out (misc, cur_char); return;
+        }
+
+        if (send_output_brace_case (cur_char))
+            return;
+
+        switch (cur_char)
+        {
+        case 0    : return;
+
+        case u8'+':
+        case u8'-': send_sign (u8',' - cur_char); return;
+
+        case u8'\'':
+            send_output_string ();
+            cur_char = static_cast<ascii_code_t> (get_output () & 0xFF);
+            if (cur_char == '\'')
+            {
+                out_state = unbreakable;
+            }
+            continue;
+
+        case join:
+            send_out (frac, 0);
+            out_state = unbreakable;
+            return;
+
+        case verbatim  : send_output_verbatim_string (); return;
+
+        case force_line: force_line_break (); return;
+
+        default        : err_print ("! Can't output ASCII code {}", static_cast<uint8_t> (cur_char));
+        }
+    }
+}
+
+void
+send_the_output ()
+{
+    while (stack_ptr > 0) { send_output_one_char (static_cast<ascii_code_t> (get_output () & 0xFF)); }
+}
+
+// section 114
+
+void
+send_out_string (uint8_t type, std::u8string_view str)
+{
+    line_ptr_t k = 1_r;
+    for (auto ch : str) { out_contrib [k++] = ch; }
+    send_out (type, static_cast<uint16_t> (str.length ()));
+}
+
+auto
+send_output_operator (ascii_code_t cur_char) -> bool
+{
+    switch (cur_char)
+    {
+    case and_sign        : send_out_string (ident, u8"AND"); return true;
+    case not_sign        : send_out_string (ident, u8"NOT"); return true;
+    case set_element_sign: send_out_string (ident, u8"IN"); return true;
+    case or_sign         : send_out_string (ident, u8"OR"); return true;
+    case left_arrow      : send_out_string (str, u8":="); return true;
+    case not_equal       : send_out_string (str, u8"<>"); return true;
+    case less_or_equal   : send_out_string (str, u8"<="); return true;
+    case greater_or_equal: send_out_string (str, u8">="); return true;
+    case equivalence_sign: send_out_string (str, u8"=="); return true;
+    case double_dot      : send_out_string (str, u8".."); return true;
+    }
+
+    return false;
+}
+
+// section 115 incorporated in section 113
+
+// section 116
+
+auto
+send_output_identifier (ascii_code_t cur_char) -> bool
+{
+    if (is_upper (cur_char))
+    {
+        out_contrib [1_r] = cur_char;
+        send_out (ident, 1);
+        return true;
+    }
+
+    if (is_lower (cur_char))
+    {
+        out_contrib [1_r] = cur_char - 040;
+        send_out (ident, 1);
+        return true;
+    }
+
+    if (cur_char == identifier)
+    {
+        pascal::int_range<0, line_length> k = 0_r;
+        auto [_, bank, j]                   = locate_byte_mem (name_pointer_t {cur_val});
+        auto end                            = byte_start [name_pointer_t {cur_val + ww}];
+        while (k < max_id_length && j < end)
+        {
+            auto ch = bank [j++];
+            if (ch >= u8'a')
+            {
+                ch -= 040;
+            }
+
+            if (ch != '_')
+            {
+                out_contrib [++k] = ch;
+            }
+        }
+
+        send_out (ident, k);
+        return true;
+    }
+
+    return false;
+}
+
+// Section 117
+
+void
+send_output_string ()
+{
+    line_ptr_t k      = 1_r;
+    out_contrib [1_r] = u8'\'';
+    do
+    {
+        if (k < line_length)
+        {
+            ++k;
+        }
+        out_contrib [k] = get_output () & 0x7F;
+    }
+    while (out_contrib [k] != u8'\'' && stack_ptr != 0);
+
+    if (k == line_length)
+    {
+        err_print ("! String too long");
+    }
+    send_out (str, k);
+}
+
+// section 118
+
+void
+send_output_verbatim_string ()
+{
+    pascal::int_range<0, line_length> k = 0_r;
+    do
+    {
+        if (k < line_length)
+        {
+            ++k;
+        }
+        out_contrib [k] = get_output () & 0x7F;
+    }
+    while (out_contrib [k] != verbatim && stack_ptr != 0);
+
+    if (k == line_length)
+    {
+        err_print ("! Verbatim string too long");
+    }
+    send_out (str, k - 1);
+}
+
+// section 119
+
+void
+send_out_number (ascii_code_t &cur_char, int base, int limit, bool (*is_valid) (ascii_code_t))
+{
+    int n = 0;
+    do
+    {
+        int digit_value = (cur_char >= u8'A') ? (cur_char - u8'A' + 10) : (cur_char - u8'0');
+        if (n >= limit)
+        {
+            err_print ("! Constant too big");
+        }
+        else
+        {
+            n = base * n + digit_value;
+        }
+        cur_char = get_output () & 0xFF;
+    }
+    while (is_valid (cur_char));
+    send_val (n);
+}
+
+auto
+send_output_constant (ascii_code_t &cur_char, pascal::int_range<0, line_length> &k) -> send_output_cases
+{
+    if (is_digit (cur_char))
+    {
+        send_out_number (cur_char, 10, 0xCCCCCCC, is_digit);
+        k = 0_r;
+
+        if (cur_char == u8'e')
+        {
+            cur_char = u8'E';
+        }
+        if (cur_char == u8'E')
+            return send_output_cases::get_fraction;
+
+        return send_output_cases::reswitch;
+    }
+
+    switch (cur_char)
+    {
+    case check_sum: send_val (pool_check_sum); return send_output_cases::consumed;
+
+    case octal:
+        cur_char = u8'0';
+        send_out_number (cur_char, 8, 0x10000000, is_octal);
+        return send_output_cases::reswitch;
+
+    case hex:
+        cur_char = u8'0';
+        send_out_number (cur_char, 16, 0x8000000, is_hex);
+        return send_output_cases::reswitch;
+
+    case number: send_val (cur_val); return send_output_cases::consumed;
+
+    case u8'.':
+        k                 = 1_r;
+        out_contrib [1_r] = u8'.';
+        cur_char          = get_output () & 0xFF;
+        if (cur_char == u8'.')
+        {
+            out_contrib [2_r] = u8'.';
+            send_out (str, 2);
+        }
+        else if (is_digit (cur_char))
+            return send_output_cases::get_fraction;
+
+        send_out (misc, u8'.');
+        return send_output_cases::reswitch;
+    }
+    return send_output_cases::not_consumed;
+}
+
+// section 120
+
+void
+finish_real_constant (ascii_code_t &cur_char, pascal::int_range<0, line_length> &k)
+{
+    do
+    {
+        if (k < line_length)
+        {
+            ++k;
+        }
+
+        auto last_char  = cur_char;
+        out_contrib [k] = cur_char;
+        cur_char        = get_output () & 0xFF;
+
+        if (last_char == u8'E' && (cur_char == u8'+' || cur_char == u8'-'))
+        {
+            if (k < line_length)
+            {
+                ++k;
+            }
+            out_contrib [k] = cur_char;
+            cur_char        = get_output () & 0xFF;
+        }
+        else if (cur_char == u8'e')
+        {
+            cur_char = u8'E';
+        }
+    }
+    while (cur_char == u8'E' || is_digit (cur_char));
+
+    if (k == line_length)
+    {
+        err_print ("! Fraction too long");
+    }
+
+    send_out (frac, k);
+}
+
+// section 121
+auto
+send_output_brace_case (ascii_code_t cur_char) -> bool
+{
+    switch (cur_char)
+    {
+    case begin_comment: send_out (misc, brace_level++ == 0 ? u8'{' : u8'['); return true;
+
+    case end_comment:
+        if (brace_level > 0)
+        {
+            send_out (misc, --brace_level == 0 ? u8'}' : u8']');
+        }
+        else
+        {
+            err_print ("! Extra @}}");
+        }
+        return true;
+
+    case module_number:
+    {
+        line_ptr_t k      = 2_r;
+        out_contrib [1_r] = (brace_level == 0 ? u8'{' : u8'[');
+        if (cur_val < 0)
+        {
+            out_contrib [k++] = u8':';
+            cur_val           = -cur_val;
+        }
+        int n = 10;
+        while (n <= cur_val) { n *= 10; }
+
+        do
+        {
+            n /= 10;
+            auto [quot, rem]  = std::div (cur_val, n);
+            cur_val           = rem;
+            out_contrib [k++] = u8'0' + quot;
+        }
+        while (n != 1);
+
+        if (out_contrib [2_r] != u8':')
+        {
+            out_contrib [k++] = u8':';
+        }
+
+        out_contrib [k] = (brace_level == 0 ? u8'}' : u8']');
+        send_out (str, k);
+        return true;
+    }
+    }
+    return false;
+}
+
+// section 122
+
+void
+force_line_break ()
+{
+    send_out (str, 0);  // normalize buffer
+    while (out_ptr > 0)
+    {
+        if (out_ptr <= line_length)
+        {
+            break_ptr = out_ptr;
+        }
+        flush_buffer ();
+    }
+    out_state = misc;
+}
+
+// section 123 nothing tbd
+
+// section 124
+
+int ii;
+int other_line = 0;
+// int temp_line; // not needed because we use std::swap
+bool input_has_ended;
+
+// line, limit, loc, changing had to be declared earlier
+
+// Section 125
+
+void
+change_changing ()
+{
+    changing = !changing;
+    std::swap (line, other_line);
+}
+
+// section 126
+
+auto change_buffer = pascal::array<buf_index_t, ascii_code_t> {};
+auto change_limit  = buf_index_t {};
+
+// section 127
+
+auto
+lines_dont_match () -> bool
+{
+    if (limit != change_limit)
+        return true;
+
+    for (auto k = buf_index_t {0}; k < limit; ++k)
+    {
+        if (buffer [k] != change_buffer [k])
+            return true;
+    }
+    return false;
+}
+
+// section 128
+
+bool
+skip_to_start_of_change ();
+bool
+skip_blank_lines ();
+void
+copy_line_to_change_buffer ();
+
+void
+prime_the_change_buffer ()
+{
+    change_limit = 0_r;
+
+    if (!skip_to_start_of_change ())
+        return;
+
+    if (!skip_blank_lines ())
+        return;
+
+    copy_line_to_change_buffer ();
+}
+
+// section 129
+
+ascii_code_t
+get_change_control_letter ()
+{
+    auto &c = buffer [1_r];
+
+    if (is_between (c, u8'X', u8'Z'))
+    {
+        c += (u8'z' - u8'Z');
+    }
+
+    return c;
+}
+
+/// searches for an @x or @X at beginning of a line in the change file, and reports an error if it finds
+/// @y or @z before that. Returns true if @x was found
+bool
+skip_to_start_of_change ()
+{
+    while (true)
+    {
+        ++line;
+        if (!input_ln (change_file))
+            return false;
+
+        if (limit < 2 || buffer [0_r] != u8'@')
+            continue;
+
+        switch (get_change_control_letter ())
+        {
+        case u8'x': return true;
+        case u8'y':
+        case u8'z': loc = 2_r; err_print ("! Where is the matching @x?");
+        }
+    }
+}
+
+// section 130
+bool
+skip_blank_lines ()
+{
+    do
+    {
+        ++line;
+        if (!input_ln (change_file))
+        {
+            err_print ("! Change file ended after @x");
+            return false;
+        }
+    }
+    while (limit <= 0);
+
+    return true;
+}
+
+// section 131
+
+void
+copy_line_to_change_buffer ()
+{
+    change_limit = limit;
+    std::copy (buffer.begin (), buffer.begin () + limit, change_buffer.begin ());
+}
+
+// section 132
+
+bool
+verify_possible_y_line (int non_matching_lines);
+
+void
+check_change ()
+{
+    if (lines_dont_match ())
+        return;
+
+    int non_matching_lines = 0;
+
+    while (true)
+    {
+        change_changing ();  // now it's true
+        ++line;
+
+        if (!input_ln (change_file))
+        {
+            err_print ("! Change file ended before @y");
+            change_limit = 0_r;
+            change_changing ();  // false again
+            return;
+        }
+
+        if (!verify_possible_y_line (non_matching_lines))
+            return;
+
+        copy_line_to_change_buffer ();
+        change_changing ();  // now it's false
+        ++line;
+
+        if (!input_ln (web_file))
+        {
+            err_print ("! WEB file ended during a change");
+            input_has_ended = true;
+            return;
+        }
+
+        if (lines_dont_match ())
+        {
+            ++non_matching_lines;
+        }
+    }
+}
+
+// section 133
+
+/// If the current line starts with @y, report any discrepancies and return false
+/// Returns true if everything is ok, false if there was an issue
+bool
+verify_possible_y_line (int non_matching_lines)
+{
+    if (line < 2 || buffer [0_r] != u8'@')
+        return true;
+
+    switch (get_change_control_letter ())
+    {
+    case u8'y':
+        if (non_matching_lines > 0)
+        {
+            loc = 2_r;
+            err_print ("! Hmm... {} of the preceding lines failed to match", non_matching_lines);
+        }
+        return false;
+
+    case u8'x':
+    case u8'z': loc = 2_r; err_print ("! Where is the matching @y?");
+    }
+
+    return true;
+}
+
+// section 134
+
+void
+initialize_input_system ()
+{
+    open_input ();
+
+    line       = 0;
+    other_line = 0;
+    changing   = true;
+
+    prime_the_change_buffer ();
+    change_changing ();
+
+    limit           = 0_r;
+    loc             = 1_r;
+
+    buffer [0_r]    = u8' ';
+    input_has_ended = false;
+}
+
+// section 135, 136
+
+void
+read_from_change_file ();
+
+void
+get_line ()
+{
+    while (true)
+    {
+        if (changing)
+        {
+            read_from_change_file ();
+        }
+
+        if (!changing)
+        {
+            ++line;
+            if (!input_ln (web_file))
+            {
+                input_has_ended = true;
+            }
+            else if (change_limit > 0)
+            {
+                check_change ();
+            }
+
+            if (changing)
+                continue;
+        }
+
+        break;
+    }
+
+    loc            = 0_r;
+    buffer [limit] = u8' ';
+}
+
+// section 137
+
+void
+read_from_change_file ()
+{
+    ++line;
+    if (!input_ln (change_file))
+    {
+        err_print ("\n! Change file ended without @z");
+
+        buffer [0_r] = u8'@';
+        buffer [1_r] = u8'z';
+        limit        = 2_r;
+    }
+
+    if (line < 2 || buffer [0_r] != u8'@')
+        return;
+
+    switch (get_change_control_letter ())
+    {
+    case u8'z':
+        prime_the_change_buffer ();
+        change_changing ();
+        break;
+
+    case u8'x':
+    case u8'y': loc = 2_r; err_print ("! Where is the matching @z?");
+    }
+}
+
+// section 138
+
+void
+check_read_all_changes ()
+{
+    if (change_limit != 0)
+    {
+        std::copy (change_buffer.begin (), change_buffer.begin () + change_limit, buffer.begin ());
+
+        limit    = change_limit;
+        changing = true;
+        line     = other_line;
+        loc      = change_limit;
+        err_print ("! Change file entry did not match");
+    }
+}
+
+// section 139
+
+/// control code of no interest to TANGLE
+constexpr auto ignore       = ascii_code_t {0};
+constexpr auto control_text = ascii_code_t {0203};  /// control code for ‘@t’, ‘@^’, etc.
+constexpr auto format       = ascii_code_t {0204};  /// control code for ‘@f’
+constexpr auto definition   = ascii_code_t {0205};  /// control code for ‘@d’
+constexpr auto begin_pascal = ascii_code_t {0206};  /// control code for ‘@p’
+constexpr auto module_name  = ascii_code_t {0207};  /// control code for ‘@<’
+constexpr auto new_module   = ascii_code_t {0210};  /// control code for ‘@ ’ and ‘@*’
+
+// Declared in module 171 what needed here already
+mod_pointer_t module_count;
+
+ascii_code_t
+control_code (ascii_code_t c)
+{
+    switch (c)
+    {
+    case u8'@'   : return u8'@';
+    case u8'\''  : return octal;
+    case u8'"'   : return hex;
+    case u8'$'   : return check_sum;
+    case u8' '   :
+    case tab_mark: return new_module;
+
+    case u8'*':
+        print ("*{}", module_count + 1);
+        update_terminal ();
+        return new_module;
+
+    case u8'D':
+    case u8'd' : return definition;
+
+    case u8'F' :
+    case u8'f' : return format;
+
+    case u8'{' : return begin_comment;
+    case u8'}' : return end_comment;
+
+    case u8'P' :
+    case u8'p' : return begin_pascal;
+
+    case u8':' :
+    case u8'T' :
+    case u8't' :
+    case u8'^' :
+    case u8'.' : return control_text;
+
+    case u8'&' : return join;
+    case u8'<' : return module_name;
+    case u8'=' : return verbatim;
+    case u8'\\': return force_line;
+
+    default    : return ignore;
+    }
+}
+
+// section 140
+// Skips all characters until the next @ or eof
+// Returns the control code if one was found
+ascii_code_t
+skip_ahead ()
+{
+    while (true)
+    {
+        if (loc > limit)  // line ended
+        {
+            get_line ();
+            if (input_has_ended)
+                return new_module;
+        }
+
+        // Put @ as marker so we don't have to check also for the end
+        buffer [limit + 1_r] = u8'@';
+        while (buffer [loc] != u8'@') { ++loc; }  // find the next marker
+
+        // If we find a @ (other than our own marker) we check the respective control code
+        if (loc <= limit)
+        {
+            loc += 2_r;
+            auto ascii = buffer [loc - 1_r];
+            auto c     = control_code (ascii);
+            if (c != ignore || ascii == u8'>')
+                return c;
+        }
+    }
+}
+
+// section 141, 142
+
+/// Skips to next unmatched '}'
+void
+skip_comment ()
+{
+    int balance = 0;
+    while (true)
+    {
+        if (loc > limit)
+        {
+            get_line ();
+            if (input_has_ended)
+            {
+                err_print ("! Input ended in mid-comment");
+                return;
+            }
+        }
+
+        ascii_code_t c = buffer [loc++];
+
+        if (c == u8'@')
+        {
+            c = buffer [loc];
+            if (c == u8' ' || c == tab_mark || c == u8'*')
+            {
+                err_print ("! Section ended in mid-comment");
+                --loc;
+                return;
+            }
+            ++loc;
+        }
+        else if (c == u8'\\' && buffer [loc] != u8'@')
+        {
+            ++loc;
+        }
+        else if (c == u8'{')
+        {
+            ++balance;
+        }
+        else if (c == u8'}')
+        {
+            if (balance == 0)
+                return;
+
+            --balance;
+        }
+    }
+}
+
+// section 143, 144
+
+/// name of module just scanned
+name_pointer_t cur_module;
+bool           scanning_hex = false;  /// are we scanning a hexadecimal constant
+
+// section 145 - 155
+ascii_code_t
+get_identifier (ascii_code_t c);
+ascii_code_t
+get_preprocessed_string ();
+void
+scan_module_name ();
+
+void
+compress (ascii_code_t &c, ascii_code_t compressed)
+{
+    if (loc <= limit)
+    {
+        c = compressed;
+        loc++;
+    }
+}
+
+bool
+compress_if (ascii_code_t &c, ascii_code_t second, ascii_code_t pattern, ascii_code_t compressed)
+{
+    if (second == pattern)
+    {
+        compress (c, compressed);
+        return true;
+    }
+
+    return false;
+}
+
+uint8_t
+get_next ()
+{
+    while (true)
+    {
+        if (loc > limit)
+        {
+            get_line ();
+            if (input_has_ended)
+                return new_module;
+        }
+        ascii_code_t c = buffer [loc++];
+
+        if (scanning_hex)
+        {
+            if (is_hex (c))
+                return c;
+
+            scanning_hex = false;
+        }
+
+        if (is_alpha (c))
+            return get_identifier (c);
+
+        ascii_code_t cc = buffer [loc];
+        switch (c)
+        {
+        case u8'"': return get_preprocessed_string ();
+
+        case u8'@':
+            c = control_code (buffer [loc]);
+            ++loc;
+            if (c == ignore)
+                continue;
+
+            if (c == hex)
+            {
+                scanning_hex = true;
+            }
+            else if (c == module_name)
+            {
+                scan_module_name ();
+            }
+            else if (c == control_text)
+            {
+                do { c = skip_ahead (); }
+                while (c == u8'@');
+
+                if (buffer [loc - 1_r] != u8'>')
+                {
+                    err_print ("! Improper @ within control text");
+                }
+
+                continue;
+            }
+            return c;
+
+            // section 147
+
+        case u8'.': compress_if (c, cc, '.', double_dot) || compress_if (c, cc, ')', u8']'); return c;
+
+        case u8':': compress_if (c, cc, '=', left_arrow); return c;
+
+        case u8'=': compress_if (c, cc, '=', equivalence_sign); return c;
+
+        case u8'>': compress_if (c, cc, '=', greater_or_equal); return c;
+
+        case u8'<':
+            compress_if (c, cc, '=', less_or_equal) || compress_if (c, cc, '>', not_equal);
+            return c;
+
+        case u8'('   : compress_if (c, cc, '*', begin_comment) || compress_if (c, cc, '.', u8'['); return c;
+
+        case u8'*'   : compress_if (c, cc, ')', end_comment); return c;
+
+        case u8' '   :
+        case tab_mark: continue;
+
+        case u8'{'   : skip_comment (); continue;
+
+        case u8'}'   : err_print ("! Extra }}"); continue;
+
+        default:
+            if (c >= 128)
+                continue;
+
+            return c;
+        }
+    }
+}
+
+// section 148
+ascii_code_t
+get_identifier (ascii_code_t c)
+{
+    if (loc > 1
+        && (c == u8'E' || c == u8'e')
+        && is_digit (buffer [loc - 2_r]))  // the char before the current
+    {
+        c = 0;
+    }
+
+    if (c != 0)
+    {
+        ascii_code_t d;
+        --loc;
+        id_first = loc;
+        do
+        {
+            ++loc;
+            d = buffer [loc];
+        }
+        while (is_alphanumeric (d) || d == u8'_');
+
+        if (loc > id_first + 1)
+        {
+            c      = identifier;
+            id_loc = loc;
+        }
+    }
+    else
+    {
+        c = u8'E';
+    }
+    return c;
+}
+
+// section 149
+ascii_code_t
+get_preprocessed_string ()
+{
+    ascii_code_t d;
+    double_chars = 0_r;
+    id_first     = loc - 1_r;
+
+    do
+    {
+        d = buffer [loc++];
+        if (d == u8'"' || d == u8'@')
+        {
+            if (buffer [loc] == d)
+            {
+                ++loc;
+                d = 0;
+                ++double_chars;
+            }
+            else if (d == u8'@')
+            {
+                err_print ("! Double @ sign missing");
+            }
+        }
+        else if (loc > limit)
+        {
+            err_print ("! String constant didn't end");
+            d = u8'"';
+        }
+    }
+    while (d != u8'"');
+
+    id_loc = loc - 1_r;
+    return identifier;
+}
+
+// section 151
+
+/// Puts module name in mod_text[1..length]
+/// Returns the length
+auto
+put_module_name_in_mod_text () -> inname_index_t;
+
+void
+scan_module_name ()
+{
+    auto k = put_module_name_in_mod_text ();
+
+    if (k > 3)
+    {
+        if (mod_text [k] == u8'.' && mod_text [k - 1_r] == u8'.' && mod_text [k - 2_r] == u8'.')
+        {
+            cur_module = prefix_lookup (k - 3);
+        }
+        else
+        {
+            cur_module = module_lookup (k);
+        }
+    }
+}
+
+// section 152 nothing tbd
+
+// section 153
+auto
+put_module_name_in_mod_text () -> inname_index_t
+{
+    auto d = ascii_code_t {0};
+    auto k = inname_index_t {0};
+    while (true)
+    {
+        if (loc > limit)  // next line
+        {
+            get_line ();
+            if (input_has_ended)
+            {
+                err_print ("! Input has ended in section name");
+                break;
+            }
+        }
+
+        d = buffer [loc];
+        if (d == u8'@')
+        {
+            d = buffer [loc + 1_r];
+            if (d == u8'>')
+            {
+                loc += 2_r;
+                break;
+            }
+            if (d == u8' ' || d == tab_mark || d == u8'*')
+            {
+                err_print ("! Section name didn't end");
+                break;
+            }
+            ++k;
+            mod_text [k] = u8'@';
+            ++loc;
+        }
+
+        ++loc;
+        if (k < longest_name - 1)
+        {
+            ++k;
+        }
+        if (d == u8' ' || d == tab_mark)
+        {
+            d = u8' ';
+            if (mod_text [k - 1_r] == u8' ')
+            {
+                --k;
+            }
+        }
+        mod_text [k] = d;
+    }
+
+    if (k > longest_name - 2)
+    {
+        print_nl ("! Section name too long: ");
+        for (auto j = inname_index_t {1}; j <= 25; ++j) { print ("{}", xchr [mod_text [j]]); }
+        print ("...");
+        if (history == 0)
+        {
+            history = harmless_message;
+        }
+    }
+
+    if (k > 0 && mod_text [k] == u8' ')
+    {
+        --k;
+    }
+
+    return k;
+}
+
+// section 156
+
+bool
+end_of_definition (ascii_code_t c)
+{ return c >= format; }
+
+ascii_code_t next_control;
+
+// section 157, 158, 159, 160, 161, 162
+
+enum class scan_numeric_cases
+{
+    consumed,
+    done,
+    reswitch,
+};
+
+auto
+scan_numeric_one (int &accumulator, sign_t &next_sign) -> scan_numeric_cases
+{
+    int            val = 0;
+    name_pointer_t q;
+
+    if (is_digit (next_control))
+    {
+        do
+        {
+            val          = 10 * val + next_control - u8'0';
+            next_control = get_next ();
+        }
+        while (is_digit (next_control));
+
+        accumulator += next_sign * val;
+        next_sign = 1_r;
+        return scan_numeric_cases::reswitch;
+    }
+
+    switch (next_control)
+    {
+    case octal:
+        next_control = u8'0';
+        do
+        {
+            val          = 8 * val + next_control - u8'0';
+            next_control = get_next ();
+        }
+        while (is_octal (next_control));
+
+        accumulator += next_sign * val;
+        next_sign = 1_r;
+        return scan_numeric_cases::reswitch;
+
+    case hex:
+        next_control = u8'0';
+        do
+        {
+            if (next_control >= 'A')
+            {
+                next_control += u8'0' - (u8'A' - 10);
+            }
+            val          = 16 * val + next_control - u8'0';
+            next_control = get_next ();
+        }
+        while (is_hex (next_control));
+
+        accumulator += next_sign * val;
+        next_sign = 1_r;
+        return scan_numeric_cases::reswitch;
+
+    case identifier:
+        q = id_lookup (normal);
+        if (ilk [q] != numeric)
+        {
+            next_control = u8'*';  // leads to error
+            return scan_numeric_cases::reswitch;
+        }
+
+        accumulator += next_sign * (equiv [q] - 0100000);
+        next_sign = 1_r;
+        return scan_numeric_cases::consumed;
+
+    case u8'+'       : return scan_numeric_cases::consumed;
+
+    case u8'-'       : next_sign = -next_sign; return scan_numeric_cases::consumed;
+
+    case format      :
+    case definition  :
+    case module_name :
+    case begin_pascal:
+    case new_module  : return scan_numeric_cases::done;
+
+    case u8';':
+        err_print ("! Omit semicolon in numeric definition");
+        return scan_numeric_cases::consumed;
+
+    default:
+        err_print ("! Improper numeric definition will be flushed");
+        do { next_control = skip_ahead (); }
+        while (!end_of_definition (next_control));
+
+        if (next_control == module_name)  // we want to scan the module name too
+        {
+            loc -= 2_r;
+            next_control = get_next ();
+        }
+
+        accumulator = 0;
+        return scan_numeric_cases::done;
+    }
+}
+
+/// defines numeric macros
+void
+scan_numeric (name_pointer_t p)
+{
+    int                accumulator = 0;    /// accumulates sums
+    sign_t             next_sign   = 1_r;  /// sign to attach to next value
+
+    scan_numeric_cases state;
+    do
+    {
+        next_control = get_next ();
+        do { state = scan_numeric_one (accumulator, next_sign); }
+        while (state == scan_numeric_cases::reswitch);
+    }
+    while (state != scan_numeric_cases::done);
+
+    if (std::abs (accumulator) >= 0100000)
+    {
+        err_print ("! Value too big: ", accumulator);
+        accumulator = 0;
+    }
+    equiv [p] = accumulator + 0100000;  // name p now is defined to equal accumulator
+}
+
+// section 163 nothing tbd
+// section 164
+
+/// replacement text formed by scan_repl
+auto cur_repl_text = text_pointer_t {};
+
+// section 165, 167
+
+void
+copy_string_from_buffer_to_tok_mem ();
+void
+copy_verbatim_from_buffer_to_tok_mem ();
+void
+ensure_parantheses_balance (int &balance);
+
+void
+scan_repl (uint8_t type)
+{
+    int      balance = 0;  /// left parentheses minus right parentheses
+    uint16_t a;
+
+    bool     done = false;
+
+    do
+    {
+        a = get_next ();
+
+        switch (a)
+        {
+        case u8'(': ++balance; break;
+
+        case u8')':
+            if (balance == 0)
+            {
+                err_print ("! Extra )");
+            }
+            else
+            {
+                --balance;
+            }
+            break;
+
+        case u8'\'': copy_string_from_buffer_to_tok_mem (); break;
+
+        case u8'#':
+            if (type == parametric)
+            {
+                a = param;
+            }
+            break;
+
+        case identifier:
+            a = id_lookup (normal);
+            app_repl (0200 + (a >> 8));
+            a &= 0xFF;
+            break;
+
+        case module_name:
+            if (type == module_name)
+            {
+                app_repl (0250 + (cur_module >> 8));
+                a = cur_module & 0xFF;
+                break;
+            }
+            done = true;
+            break;
+
+        case verbatim: copy_verbatim_from_buffer_to_tok_mem (); break;
+
+        case definition:
+        case format:
+        case begin_pascal:
+            if (type == module_name)
+            {
+                err_print ("! @ {} is ignored in Pascal text", xchr [buffer [loc - 1_r]]);
+                continue;
+            }
+            done = true;
+            break;
+
+        case new_module: done = true; break;
+        }
+
+        if (!done)
+        {
+            app_repl (a & 0xFF);  // store a in tok_mem
+        }
+    }
+    while (!done);
+
+    next_control = a & 0xFF;
+    ensure_parantheses_balance (balance);
+    if (text_ptr > max_texts - zz)
+        overflow ("text");
+
+    cur_repl_text             = text_ptr;
+    tok_start [text_ptr + zz] = tok_ptr [z];
+    ++text_ptr;
+    if (z == zz - 1)
+    {
+        z = 0_r;
+    }
+    else
+    {
+        ++z;
+    }
+}
+
+// section 166
+
+void
+ensure_parantheses_balance (int &balance)
+{
+    if (balance > 0)
+    {
+        if (balance == 1)
+        {
+            err_print ("! Missing )");
+        }
+        else
+        {
+            err_print ("! Missing {} )'s", balance);
+        }
+    }
+
+    while (balance > 0)
+    {
+        app_repl (u8')');
+        --balance;
+    }
+}
+
+// section 168
+
+void
+copy_string_from_buffer_to_tok_mem ()
+{
+    ascii_code_t b = u8'\'';
+
+    while (true)
+    {
+        app_repl (b);
+        if (b == u8'@')
+        {
+            if (buffer [loc] == u8'@')
+            {
+                ++loc;  // store only one @
+            }
+            else
+            {
+                err_print ("! You should double @ signs in strings");
+            }
+        }
+
+        if (loc == limit)
+        {
+            err_print ("! String didn't end");
+            buffer [loc]       = '\'';
+            buffer [loc + 1_r] = 0;
+        }
+
+        b = buffer [loc++];
+        if (b == u8'\'')
+        {
+            if (buffer [loc] != u8'\'')
+                break;
+
+            ++loc;
+            app_repl (u8'\'');
+        }
+    }
+}
+
+// section 169
+
+void
+copy_verbatim_from_buffer_to_tok_mem ()
+{
+    app_repl (verbatim);
+    buffer [limit + 1_r] = u8'@';
+
+    while (true)
+    {
+        if (buffer [loc] == u8'@')
+        {
+            if (loc < limit)
+            {
+                if (buffer [loc + 1_r] == u8'@')
+                {
+                    app_repl (u8'@');
+                    loc += 2_r;
+                    continue;
+                }
+            }
+        }
+        else
+        {
+            app_repl (buffer [loc++]);
+            continue;
+        }
+
+        break;
+    }
+
+    if (loc >= limit)
+    {
+        err_print ("! Verbatim string didn't end");
+    }
+    else if (buffer [loc + 1_r] != u8'>')
+    {
+        err_print ("! You shouldn't double @ signs in verbatim strings");
+    }
+
+    loc += 2_r;
+}
+
+// section 170
+
+void
+define_macro (ilk_value type)
+{
+    auto p = id_lookup (type);
+    scan_repl (type);
+    equiv [p]                 = cur_repl_text;
+    text_link [cur_repl_text] = 0;
+}
+
+// section 171 nothing tbd
+
+// section 172
+void
+scan_definition_part ();
+void
+scan_pascal_part ();
+
+void
+scan_module ()
+{
+    ++module_count;
+    scan_definition_part ();
+    scan_pascal_part ();
+}
+
+// section 173, 174
+
+void
+scan_definition_part ()
+{
+    next_control = 0;
+
+    while (true)
+    {
+        while (next_control <= format)
+        {
+            next_control = skip_ahead ();
+            if (next_control == module_name)  // we want to scan the module name too
+            {
+                loc -= 2_r;
+                next_control = get_next ();
+            }
+        }
+
+        if (next_control != definition)
+            return;
+
+        next_control = get_next ();  // get identifier name
+        if (next_control != identifier)
+        {
+            err_print ("! Definition flushed must start with identifier of length > 1");
+            continue;
+        }
+        next_control = get_next ();  // get token after the identifier
+
+        if (next_control == u8'=')
+        {
+            scan_numeric (id_lookup (numeric));
+            continue;
+        }
+
+        if (next_control == equivalence_sign)
+        {
+            define_macro (simple);
+            continue;
+        }
+
+        if (next_control == u8'(')
+        {
+            next_control = get_next ();
+            if (next_control == u8'#')
+            {
+                next_control = get_next ();
+                if (next_control == u8')')
+                {
+                    next_control = get_next ();
+                    if (next_control == u8'=')
+                    {
+                        err_print ("! Use == for macros");
+                        next_control = equivalence_sign;
+                    }
+                    if (next_control == equivalence_sign)
+                    {
+                        define_macro (parametric);
+                        continue;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// section 175, 176
+
+void
+scan_pascal_part ()
+{
+    name_pointer_t p;
+    switch (next_control)
+    {
+    case begin_pascal: p = 0_r; break;
+    case module_name:
+        p = cur_module;
+
+        do { next_control = get_next (); }
+        while (next_control == u8'+');
+
+        if (next_control != u8'=' && next_control != equivalence_sign)
+        {
+            err_print ("! Pascal text flushed, = sign is missing");
+            do { next_control = skip_ahead (); }
+            while (next_control != new_module);
+            return;
+        }
+        break;
+
+    default: return;
+    }
+
+    // Insert module number into tok_mem
+    store_two_bytes (0150000 + module_count);  // 01500000 = 0320 * 0400
+    scan_repl (module_name);                   // now cur_repl_text points to the replacement text
+
+    if (p == 0)  // unnamed module
+    {
+        text_link [last_unnamed] = cur_repl_text;
+        last_unnamed             = cur_repl_text;
+    }
+    else if (equiv [p] == 0)  // first module of this name
+    {
+        equiv [p] = cur_repl_text;
+    }
+    else
+    {
+        p = name_pointer_t {equiv [p]};
+        while (text_link [p] < module_flag)  // find end of list
+        {
+            p = name_pointer_t {text_link [p]};
+        }
+        text_link [p] = cur_repl_text;
+    }
+
+    text_link [cur_repl_text] = module_flag;  // mark this replacement text as nonmacro
+}
+
+// section 179, 180, 181: debugging, left out for now
+
+// section 182
+
+void
+initialize ()
+{
+    // section 10
+    history = spotless;
+
+    // section 14, 17: xchr will never be changed
+
+    // section 18
+    initialize_xord ();
+
+    // section 21 nothing tbd
+
+    // section 26
+    open_output ();
+
+    // section 42
+    std::fill (byte_start.begin (), byte_start.begin () + ww + 1, 0);  // one more to make name 0 of
+                                                                       // length 0
+    std::fill (byte_ptr.begin (), byte_ptr.end (), 0_r);
+    name_ptr       = 1_r;
+    string_ptr     = 256_r;
+    pool_check_sum = 271828;
+
+    // section 46
+    std::fill (tok_start.begin (), tok_start.begin () + zz + 1, 0);  // one more to make replacement text
+                                                                     // 0 of length 0
+    std::fill (tok_ptr.begin (), tok_ptr.end (), 0_r);
+    text_ptr = 1_r;
+    z        = 1_r;
+
+    // section 48
+    rlink [0_r] = 0;
+    equiv [0_r] = 0;
+
+    // section 52
+    std::fill (hash.begin (), hash.end (), 0_r);
+    std::fill (chop_hash.begin (), chop_hash.end (), 0_r);
+
+    // section 71
+    last_unnamed    = 0_r;
+    text_link [0_r] = 0;
+
+    // section 144
+    scanning_hex = false;
+
+    // section 152
+    mod_text [0_r] = u8' ';
+
+    // section 180 nothing tbd
+}
+
+// section 182
+int
+tangle (
+    std::filesystem::path web_file_name,
+    std::filesystem::path change_file_name,
+    std::filesystem::path pascal_file_name,
+    std::filesystem::path pool_file_name)
+{
+    web_file.assign (web_file_name);
+    change_file.assign (change_file_name);
+    pascal_file.assign (pascal_file_name);
+    pool.assign (pool_file_name);
+
+    initialize ();
+    initialize_input_system ();
+    print_ln ("{}", banner);
+
+    phase_one    = true;
+    module_count = 0_r;
+
+    do { next_control = skip_ahead (); }
+    while (next_control != new_module);
+
+    while (!input_has_ended) { scan_module (); }
+
+    check_read_all_changes ();
+    phase_one = false;
+
+    output_compressed_tables ();
+    if (string_ptr > 256)
+    {
+        print_nl ("{} strings written to string pool file.", string_ptr - 256);
+        pool.write ('*');
+        for (out_buf_ptr_t i = 1_r; i <= 9; ++i)
+        {
+            auto [quot, rem] = std::div (pool_check_sum, 10);
+            out_buf [i]      = rem;
+            pool_check_sum   = quot;
+        }
+        for (out_buf_ptr_t i = 9_r; i >= 1; --i) { pool.write (xchr [u8'0' + out_buf [i]]); }
+        pool.write_line ();
+    }
+
+    web_file.close ();
+    change_file.close ();
+    pascal_file.close ();
+    pool.close ();
+
+    return 0;
+}
+
+int
+tangle_exceptions_handled (
+    std::filesystem::path web_file_name,
+    std::filesystem::path change_file_name,
+    std::filesystem::path pascal_file_name,
+    std::filesystem::path pool_file_name)
+{
+    try
+    {
+        return tangle (web_file_name, change_file_name, pascal_file_name, pool_file_name);
+    }
+    catch (const std::filesystem::filesystem_error &ex)
+    {
+        std::println (stderr);
+        std::println (stderr, "[CRITICAL ERROR] File system exception!");
+        std::println (stderr, "What: {}", ex.what ());
+        std::println (stderr, "Path 1: {}", ex.path1 ().string ());
+        return 1;
+    }
+    catch (const std::exception &ex)
+    {
+        std::println (stderr);
+        std::println (stderr, "[CRITICAL ERROR] Standard Exception Caught!");
+        std::println (stderr, "What: {}", ex.what ());
+        return 3;
+    }
+    catch (...)
+    {
+        std::println (stderr);
+        std::println (stderr, "[CRITICAL ERROR] An unknown non-standard error occurred!");
+        return 4;
+    }
+}

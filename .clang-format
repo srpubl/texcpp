@@ -1,0 +1,125 @@
+---
+Language: Cpp
+BasedOnStyle: Microsoft
+
+AlignConsecutiveDeclarations: AcrossEmptyLines
+AlignConsecutiveAssignments: AcrossEmptyLines
+
+AlignConsecutiveShortCaseStatements: 
+    Enabled: true
+    AcrossEmptyLines: true
+    AcrossComments: true
+    AlignCaseColons: true
+
+AlignOperands: AlignAfterOperator
+
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
+
+AlignAfterOpenBracket: Align
+
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseExpressionOnASingleLine: true 
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: true
+
+AlwaysBreakBeforeMultilineStrings: true
+
+BinPackArguments : false
+BinPackLongBracedList: true
+BinPackParameters : false
+
+
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterObjCDeclaration: false
+  AfterNamespace: true
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeWhile: true
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+
+BreakAfterOpenBracketBracedList: true
+BreakAfterOpenBracketFunction: true
+BreakAfterOpenBracketIf: true
+BreakAfterOpenBracketLoop: true
+BreakAfterOpenBracketSwitch: true
+BreakAfterReturnType : All
+
+BreakBeforeBinaryOperators : All
+BreakBeforeBraces: Custom
+BreakBeforeCloseBracketBracedList: true
+BreakBeforeCloseBracketFunction : false
+BreakBeforeCloseBracketIf : false
+BreakBeforeCloseBracketSwitch : false
+BreakBeforeConceptDeclarations: Always
+# BreakBeforeReturnType : AllDefinitions
+BreakBeforeTemplateCloser : false
+BreakBeforeTernaryOperators : true
+BreakBinaryOperations: RespectPrecedence
+BreakConstructorInitializers : BeforeComma
+BreakInheritanceList : BeforeComma
+BreakTemplateDeclarations : Yes
+
+ColumnLimit: 105
+
+Cpp11BracedListStyle: true
+
+EmptyLineBeforeAccessModifier : Always
+IndentAccessModifiers : false
+IndentCaseBlocks : false
+IndentCaseLabels: false
+IndentRequiresClause : true
+IndentWrappedFunctionNames : false
+
+MaxEmptyLinesToKeep: 1
+
+NamespaceIndentation: Inner
+
+PackConstructorInitializers : NextLine
+
+PointerAlignment: Right
+ReferenceAlignment: Right
+
+RequiresClausePosition : OwnLine
+
+SeparateDefinitionBlocks : Always
+
+SpaceAfterCStyleCast : true
+SpaceAfterLogicalNot : false
+SpaceAfterTemplateKeyword : true
+SpaceBeforeAssignmentOperators : true
+SpaceBeforeCaseColon: false
+SpaceBeforeCpp11BracedList: true
+SpaceBeforeCtorInitializerColon : true
+SpaceBeforeInheritanceColon : true
+SpaceBeforeParens : Always
+SpaceBeforeRangeBasedForLoopColon : true
+SpaceBeforeSquareBrackets : true
+SpaceInEmptyBlock : false
+SpacesBeforeTrailingComments : 2
+
+SpacesInAngles: false
+SpacesInParens : Never
+SpacesInSquareBrackets : false
+
+SpacesInContainerLiterals: false
+
+PenaltyBreakBeforeFirstCallParameter: 5000
+
+
+

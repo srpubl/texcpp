@@ -1,0 +1,31 @@
+name: TANGLE Web Validation Suite
+on: [push, pull_request]
+
+jobs:
+  validate:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false 
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Only run this step on Ubuntu to force GCC 14 (supports C++23 <print>)
+      - name: Install Modern GCC on Ubuntu
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14
+          echo "CC=gcc-14" >> $GITHUB_ENV
+          echo "CXX=g++-14" >> $GITHUB_ENV
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compile TANGLE Engine
+        run: cmake --build build --config Release
+
+      - name: Run GoogleTest Suite Matrix
+        run: cd build && ctest --output-on-failure -C Release

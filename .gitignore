@@ -1,0 +1,3 @@
+# CMake and IDE Build Output folders
+/out/
+/.vs/
