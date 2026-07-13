@@ -2,9 +2,6 @@
 
 This is an attempt to rewrite TeX and related tools in C++. Our goal is a fully bit-compliant re-implementation of TeX and its ecosystem.
 
-![Build Status](https://github.com)
-![C++ Version](https://shields.io)
-![Tests](https://shields.io)
 
 ## Status
 We started with tangle to gain experience. This version of tangle is fully bit-compliant with 
