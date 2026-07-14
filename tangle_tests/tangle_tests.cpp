@@ -54,7 +54,7 @@ class TangleValidation : public ::testing::TestWithParam<TangleTestCase>
         const auto &test_case = GetParam ();
         auto        diff      = compare_files (expected, generated);
 
-        ASSERT_TRUE (diff.identical)
+        EXPECT_TRUE (diff.identical)
             << "Mismatch in test case [" << test_case.test_name 
             << "] at byte position: "   << diff.byte_position
             << "\n  line number:                 " << diff.line_number
@@ -71,7 +71,7 @@ TEST_P (TangleValidation, ExecutableMatchesOriginal)
     const auto &test_case = GetParam ();
 
     int         exitCode  = tangle_exceptions_handled (webPath, chPath, generatedPascal, generatedPool);
-    ASSERT_EQ (exitCode, 0) << "TANGLE returned a non-zero exit code!";
+    EXPECT_EQ (exitCode, 0) << "TANGLE returned a non-zero exit code!";
 
     compare_and_print_error (expectedPascal, generatedPascal);
     compare_and_print_error (expectedPool, generatedPool);

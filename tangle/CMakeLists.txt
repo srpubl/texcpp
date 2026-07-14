@@ -6,7 +6,7 @@ file(GLOB TANGLE_SOURCES "*.cpp" "*.h")
 set(LIB_SOURCES ${TANGLE_SOURCES})
 list(REMOVE_ITEM LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp")
 
-add_library(tangle_lib STATIC ${LIB_SOURCES})
+add_library(tangle_lib STATIC ${LIB_SOURCES} )
 target_include_directories(tangle_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(tangle_bin main.cpp)
