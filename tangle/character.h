@@ -1,7 +1,11 @@
 #pragma once
 
+#include <array>
+
+#include "utility/between.h"
+
 // misleading name, ASCII is only 0..127
-using ascii_code_t = char8_t;
+using ascii_code_t = char8_t;  /// the internally used type
 
 constexpr auto and_sign         = ascii_code_t {04};   // equivalent to 'and'
 constexpr auto not_sign         = ascii_code_t {05};   // equivalent to 'not'
@@ -44,3 +48,49 @@ is_hex (ascii_code_t c)
 constexpr bool
 is_alphanumeric (ascii_code_t c)
 { return is_alpha (c) || is_digit (c); }
+
+
+namespace detail
+{
+inline constexpr auto xchr = std::array<char, 256> {
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  '!', '"', '#', '$', '%', '&', '\'',
+    '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4',  '5', '6', '7', '8', '9', ':', ';',
+    '<', '=', '>', '?', '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',  'I', 'J', 'K', 'L', 'M', 'N', 'O',
+    'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '[', '\\', ']', '^', '_', '`', 'a', 'b', 'c',
+    'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',  'q', 'r', 's', 't', 'u', 'v', 'w',
+    'x', 'y', 'z', '{', '|', '}', '~', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' ', ' ', ' ', ' ', ' ',
+    ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ',  ' ', ' ', ' '  //
+};
+}
+
+[[nodiscard]] inline constexpr auto
+convert_to_output (ascii_code_t c) -> char
+{ return detail::xchr [c]; }
+
+namespace detail
+{
+[[nodiscard]] inline constexpr auto
+generate_input_table ()
+{
+    auto table = std::array<ascii_code_t, 256> {};
+    std::fill (table.begin (), table.end (), u8' ');
+    for (ascii_code_t c = 1; c != 0; ++c)  // overflows into 0 after c == 255
+    {
+        table [convert_to_output (c)] = c;
+    }
+    table [' '] = u8' ';
+    return table;
+}
+
+inline constexpr std::array<ascii_code_t, 256> xord = generate_input_table ();
+}  // namespace detail
+
+[[nodiscard]] inline constexpr auto
+convert_from_input (char c) -> ascii_code_t
+{ return detail::xord [c]; }

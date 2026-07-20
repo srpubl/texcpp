@@ -4,10 +4,6 @@
 #include <print>
 #include <utility>
 
-using text_char                = unsigned char;  /// the data type of characters in text files
-constexpr auto first_text_char = text_char {0};  /// ordinal number of the smallest element of text char
-constexpr auto last_text_char  = text_char {255};  /// ordinal number of the largest element of text char
-
 class terminal
 {
     std::FILE *stream = stdout;
@@ -38,7 +34,7 @@ public:
 
     // Special version because this case happens so often
     inline void
-    print (text_char ch)
+    print (char ch)
     { std::fputc (ch, stream); }
 
     template <typename... Args>

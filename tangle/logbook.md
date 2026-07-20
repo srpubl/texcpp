@@ -24,3 +24,31 @@ or printed via err.terminal().print*.
 In a later stage we will make the respective err and term not global anymore but we
 don't want to make them arguments to all possible functions now because there is hope that they will be
 members of the class output_system and input_system.
+
+### send_out
+
+First we split send_out in two functions: send_out_misc for the case that type == misc and send_out for all 
+other cases to simplify the logic inside. send_out_misc doesn't need the type parameter anymore and the
+parameter v actually indicates the character to send out.
+
+Then in send_out, we introduce a local variable std::u8string_view content = {&out_contrib[1_r], v} and adapt
+the copy loop accordingly such that there are no further mentions of out_contrib and v inside send_out. C&T.
+We then replace the parameter v with content and adapt all calls to send_out(type, v) to 
+send_out (type, {&out_contrib[1_r], v}). C&T. Now, we simplify all calls to send_out step by step, removing all 
+references to out_contrib. send_out(frac, 0) -> send_out(frac, {&out_contrib[1_r], 0}) -> send_out(frac, 0).
+send_out_string simplifies to a simple forwarding to send_out, so we remove it completely.
+
+&out_contrib[1_r] = cur_char;
+sent_out(ident, 1);
+-> 
+&out_contrib[1_r] = cur_char;
+send_out (ident, {&out_contrib [1_r], 1}) 
+-> 
+send_out (ident, {&cur_char, 1});
+
+For complex cases, we create a std::array<char8_t, n> buffer on the stack (n context-dependent). We need to take
+care that out_contrib starts with index 1 but buffer with 0. Luckily, we are in a position to C&T after every 
+transformation independently of the other transformations. It helps to first make the buffer one element larger, 
+write send_out (str, {&buffer [1], n}), and in a second step adapt the indices and write 
+send_out (str, {buffer.data(), n}). 
+

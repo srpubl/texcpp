@@ -1,206 +1,219 @@
 #pragma once
 
-#include <iostream>
+#include <cstdio>
 #include <filesystem>
-#include <fstream>
-#include <string>
 #include <stdexcept>
+#include <string>
 
-namespace pascal 
+namespace pascal
 {
 
 #if defined(_WIN32) || defined(__WIN32__) || defined(WIN32)
-inline const std::string native_newline = "\r\n"; // Windows CRLF (13, 10)
+inline const std::string native_newline = "\r\n";  // Windows CRLF (13, 10)
 #else
-inline const std::string native_newline = "\n"; // Unix/Linux/macOS LF (10)
+inline const std::string native_newline = "\n";  // Unix/Linux/macOS LF (10)
 #endif
 
-class text_file 
+class text_file
 {
-private:
-    std::fstream stream;
+  private:
     std::filesystem::path filepath;
+    std::FILE            *file          = nullptr;
+    char                  current_char  = ' ';
+    bool                  is_eof        = true;
+    bool                  is_eol        = false;
+    bool                  is_input_mode = true;
 
-    char current_char = ' ';
-    bool is_eof = true;
-    bool is_eol = false;
-    bool is_input_mode = true;
-
-    void 
-    read_next_char () 
+    void
+    read_next_char ()
     {
-        if (!stream.is_open()) 
+        if (!file)
             return;
 
-        int next = stream.get();
-        if (next == EOF) 
+        int next = std::fgetc (file);
+        if (next == EOF)
         {
-            is_eof = true;
-            is_eol = false;
-            current_char = ' '; // Pascal defaults to space on EOF
-        } 
-		else if (next == '\r') // Handle Old Mac and Windows line endings
+            is_eof       = true;
+            is_eol       = false;
+            current_char = ' ';  // Pascal defaults to space on EOF
+        }
+        else if (next == '\r')  // Handle Old Mac and Windows line endings
         {
             // Handle Windows \r\n line endings safely
-            int peek_next = stream.peek();
-            if (peek_next == '\n') 
+            int peek_next = std::fgetc (file);
+            if (peek_next != '\n' && peek_next != EOF)
             {
-                stream.get();
+                std::ungetc (peek_next, file);
             }
-            is_eol = true;
-            current_char = ' '; // Pascal replaces newlines in the buffer with a space
+            is_eol       = true;
+            current_char = ' ';  // Pascal replaces newlines in the buffer with a space
         }
-        else if (next == '\n') // Handle Unix \n line endings
+        else if (next == '\n')  // Handle Unix \n line endings
         {
-            is_eol = true;
+            is_eol       = true;
             current_char = ' ';
         }
-        else 
+        else
         {
-            is_eof = false;
-            is_eol = false;
-            current_char = static_cast<char>(next);
+            is_eof       = false;
+            is_eol       = false;
+            current_char = static_cast<char> (next);
         }
     }
 
     inline void
-    open (bool input_mode, std::ios_base::openmode mode)
+    open (bool input_mode, const char *mode)
     {
         if (filepath.empty ())
             throw std::logic_error ("assign() not called before opening file");
 
-        if (stream.is_open ())
+        if (file)
         {
-            stream.close ();
+            std::fclose (file);
+            file = nullptr;
         }
 
         is_input_mode = input_mode;
-        stream.open(filepath, mode);
 
-        if (!stream)
+#if defined(_WIN32) && defined(_MSC_VER)
+        // Safe, native wide-character path opening on Windows
+        _wfopen_s (&file, filepath.c_str (), std::filesystem::path (mode).c_str ());
+#else
+        file = std::fopen (filepath.c_str (), mode);
+#endif
+
+        if (!file)
             // TODO: System could be out of memory, so the string concatenation would fail.
-            throw std::runtime_error("Could not open file: " + filepath.string());
+            throw std::runtime_error ("Could not open file: " + filepath.string ());
 
         is_eof = false;
         is_eol = false;
     }
 
     inline void
-	check_is_input_mode() 
+    check_is_input_mode ()
     {
-		if (!is_input_mode)
-			throw std::logic_error("File is not opened in input mode");
-	}
+        if (!is_input_mode)
+            throw std::logic_error ("File is not opened in input mode");
+    }
 
     inline void
-    check_is_output_mode()
+    check_is_output_mode ()
     {
         if (is_input_mode)
-            throw std::logic_error("File is not opened in input mode");
+            throw std::logic_error ("File is not opened in input mode");
     }
 
-
-
-public:
+  public:
     text_file () {}
 
-    // Replaces Pascal: assign(f, path);
-    void 
-    assign(const std::filesystem::path &path) 
+    ~text_file ()
     {
-        filepath = path;
+        if (file)
+        {
+            std::fclose (file);
+        }
     }
 
+    // Replaces Pascal: assign(f, path);
+    void
+    assign (const std::filesystem::path &path)
+    { filepath = path; }
+
     // Replaces Pascal: reset(f);
-    void 
-    reset () 
+    void
+    reset ()
     {
-		open (true, std::ios::in | std::ios::binary);        
-        read_next_char (); 
+        open (true, "rb");
+        read_next_char ();
     }
 
     // Replaces Pascal: rewrite(f);
-    void 
-    rewrite () 
+    void
+    rewrite ()
     {
-        open(false, std::ios::out | std::ios::trunc | std::ios::binary);
+        open (false, "wb");
         current_char = ' ';
     }
 
     // Replaces Pascal: eof(f)
-    bool 
-    eof () const { return is_eof; }
+    bool
+    eof () const
+    { return is_eof; }
 
     // Replaces Pascal: eoln(f)
-    bool 
-    eol () const { return is_eol; }
+    bool
+    eol () const
+    { return is_eol; }
 
-	// Replaces Pascal: f^
+    // Replaces Pascal: f^
     char
-	current() const { return current_char; }
+    current () const
+    { return current_char; }
 
-	// Replaces Pascal: get(f)
+    // Replaces Pascal: get(f)
     void
-	get() 
+    get ()
     {
-		check_is_input_mode();
-		read_next_char();
-	}
+        check_is_input_mode ();
+        read_next_char ();
+    }
 
     // Replaces Pascal: read(f, ch)
-    void 
-    read (char& ch) 
+    void
+    read (char &ch)
     {
-		check_is_input_mode();
-        
-        if (is_eof) 
+        check_is_input_mode ();
+
+        if (is_eof)
         {
             ch = ' ';
-        } 
-        else 
+        }
+        else
         {
             ch = current_char;
-            read_next_char();
+            read_next_char ();
         }
     }
 
     // Replaces Pascal: readln(f)
-    void 
-    read_line () 
+    void
+    read_line ()
     {
-        check_is_input_mode();
+        check_is_input_mode ();
 
-        while (!is_eol && !is_eof) 
+        while (!is_eol && !is_eof) { read_next_char (); }
+        if (is_eol)
         {
-            read_next_char();
-        }
-        if (is_eol) 
-        {
-            read_next_char();
+            read_next_char ();
         }
     }
 
-    // Replaces Pascal: write(f, ch) or write(f, string)
-    template <typename T>
-    void write (const T& val) 
+    // Replaces Pascal: write(f, ch)
+    void
+    write (char ch)
     {
-		check_is_output_mode();
-        stream << val;
+        check_is_output_mode ();
+        std::fputc (ch, file);
     }
 
     // Replaces Pascal: writeln(f)
-    void 
-    write_line () 
+    void
+    write_line ()
     {
-		check_is_output_mode();
-        stream << native_newline;
+        check_is_output_mode ();
+        std::fputs (native_newline.c_str (), file);
     }
 
-    void 
+    void
     close ()
     {
-        stream.close();
+        if (file)
+        {
+            std::fclose (file);
+            file = nullptr;
+        }
     }
 };
 
-}
+}  // namespace pascal

@@ -4,6 +4,11 @@ project(texcpp CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    # The generator expression enforces that these flags apply ONLY to C++ files
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/Zc:char8_t;/permissive-;/w14242>")
+endif()
+
 enable_testing()
 
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/include")
