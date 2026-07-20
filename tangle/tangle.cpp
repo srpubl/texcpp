@@ -12,10 +12,10 @@
 #include "pascal/text_file.h"
 
 #include "character.h"
+#include "error.h"
+#include "out_buffer.h"
 #include "tangle.h"
 #include "terminal.h"
-
-#include "error.h"
 
 static_assert (CHAR_BIT == 8, "Error: This codebase strictly requires an 8-bit char architecture");
 
@@ -39,7 +39,6 @@ constexpr size_t max_texts    = 2000;   /// number of replacement texts, must be
 constexpr size_t hash_size    = 353;    /// should be prime
 constexpr size_t longest_name = 400;    /// module names shouldn’t be longer than this
 constexpr size_t line_length  = 72;     /// lines of Pascal output have at most this many characters
-constexpr size_t out_buf_size = 144;    /// length of output buffer, should be twice line_length
 constexpr size_t stack_size   = 50;     /// number of simultaneous levels of macro expansion
 constexpr size_t max_id_length
     = 12;  /// long identifiers are chopped to this length, which must not exceed line length
@@ -74,9 +73,6 @@ void
 print (terminal &term, ascii_code_t c)
 { term.print (convert_to_output(c)); }
 
-void
-write (pascal::text_file &file, ascii_code_t c)
-{ file.write (convert_to_output (c)); }
 
 // section 24
 void
@@ -194,14 +190,13 @@ print_error_location_input (terminal &term)
 // section 33
 
 // defined in later section but needed here already
-using out_buf_t = std::vector<ascii_code_t>;
-auto out_buf    = out_buf_t {};
+auto out_buf = out_buffer {line_length, pascal_file};
 
 void
 print_error_location_output (terminal &term)
 {
-    term.print_ln (". (l.{})", line);
-    for (auto c : out_buf) { print (term, c); }
+    term.print_ln (". (l.{})", out_buf.current_line());
+    for (auto c : out_buf.temporary_view()) { print (term, c); }
     term.print ("... ");
 }
 
@@ -1213,11 +1208,6 @@ copy_parameter_to_tok_mem ()
 }
 
 // section 94
-
-/// last breaking place in out_buf
-size_t break_index;
-size_t semi_index;  /// last semicolon breaking place in out_buf
-
 // section 95
 
 /// state associated with special characters
@@ -1241,33 +1231,14 @@ auto last_sign                  = sign_t {};  /// sign to use if appending a zer
 void
 initialize_output_buffer ()
 {
-    out_buf.reserve (out_buf_size);
     out_state   = misc;
-    break_index = 0;
-    semi_index  = 0;
-    line        = 1;
 }
 
 // section 97
 
-/// writes one line to output file
 void
-flush_buffer (terminal &term)
+on_new_line (int line)
 {
-    auto last_break_index = break_index;
-
-    if (semi_index != 0 && out_buf.size () - semi_index <= line_length)
-    {
-        break_index = semi_index;
-    }
-
-    for (auto k = out_buf.begin (); k < out_buf.begin () + break_index; ++k)
-    {
-        write (pascal_file, *k);
-    }
-    pascal_file.write_line ();
-    ++line;
-
     if (line % 100 == 0)
     {
         term.print ('.');
@@ -1277,93 +1248,14 @@ flush_buffer (terminal &term)
         }
         term.update ();
     }
-
-    if (break_index < out_buf.size ())
-    {
-        if (out_buf [break_index] == u8' ')
-        {
-            // drop space at break
-            if (++break_index > last_break_index)
-            {
-                last_break_index = break_index;
-            }
-        }
-
-        // shift remaining line to front
-        out_buf.erase (out_buf.begin (), out_buf.begin() + break_index);
-    }
-    else
-    {
-        out_buf.clear ();
-    }
-
-    break_index = last_break_index - break_index;
-    semi_index  = 0;
-
-    if (out_buf.size () > line_length)
-    {
-        err.err_print ("! Long line must be truncated");
-        out_buf.resize (line_length);
-    }
 }
 
 void
-check_break ()
-{
-    if (out_buf.size () > line_length)
-    {
-        flush_buffer (term);
-    }
-}
+on_line_truncated ()
+{ err.err_print ("! Long line must be truncated"); }
 
 // section 98
-
-void
-empty_last_line_from_buffer (terminal &term)
-{
-    break_index = out_buf.size ();
-    semi_index  = 0;
-    flush_buffer (term);
-    if (brace_level != 0)
-    {
-        err.err_print ("! Program ended at brace level {}", brace_level);
-    }
-}
-
 // section 99
-
-/// appends a character to out_buf
-void
-app (ascii_code_t ch)
-{ out_buf.push_back (ch); }
-
-/// Writes value backwards into a buffer starting from (the byte before) end
-/// Returns the start of the string, anchored at the tail of the buffer
-/// Caller must make sure that value is not negative and that buffer is large enough
-constexpr ascii_code_t *
-to_chars (ascii_code_t *end, int value) noexcept
-{
-    do
-    {
-        auto [quot, rem] = std::div (value, 10);
-        *(--end)         = static_cast<ascii_code_t> (u8'0' + rem);
-        value            = quot;
-    }
-    while (value > 0);
-
-    return end;
-}
-
-/// appends value to out_buf
-void
-app_val (int value)
-{
-    ascii_code_t digit_buffer [11];
-    auto end = &digit_buffer [11];
-    auto begin = to_chars (end, value);
-    out_buf.insert (out_buf.end (), begin, end);
-}
-
 // section 100
 
 constexpr auto str   = 1;  /// send_out code for a string
@@ -1381,9 +1273,9 @@ send_out (uint8_t type, std::u8string_view content)
 {
     prepare_buffer_for_append (type, content);
 
-    for (auto c: content) { app (c); }
+    for (auto c: content) { out_buf.append (c); }
 
-    check_break ();
+    out_buf.flush_line_if_too_long ();
 
     out_state = (type >= ident ? num_or_id : misc);
 }
@@ -1393,13 +1285,14 @@ send_out_misc (uint16_t v)
 {
     ascii_code_t c = v & 0xFF;
     prepare_buffer_for_append (misc, {&c, 1});
-    app (c);
+    out_buf.append (c);
 
-    check_break ();
+    out_buf.flush_line_if_too_long ();
 
     if (c == u8';' || c == u8'}')
     {
-        break_index = semi_index = out_buf.size ();
+        out_buf.mark_break ();
+        out_buf.mark_semicolon ();
     }
 
     out_state = misc;
@@ -1423,18 +1316,18 @@ prepare_buffer_for_append (uint8_t type, std::u8string_view content)
         case num_or_id:
             if (type != frac)
             {
-                break_index = out_buf.size ();
+                out_buf.mark_break ();
                 if (type == ident)
                 {
-                    app (u8' ');
+                    out_buf.append (u8' ');
                 }
             }
             return;
 
         case sign:
-            app (u8',' - out_app);
-            check_break ();
-            break_index = out_buf.size ();
+            out_buf.append (u8',' - out_app);
+            out_buf.flush_line_if_too_long ();
+            out_buf.mark_break ();
             return;
 
         case sign_val:
@@ -1451,7 +1344,7 @@ prepare_buffer_for_append (uint8_t type, std::u8string_view content)
         case misc:
             if (type != frac)
             {
-                break_index = out_buf.size ();
+                out_buf.mark_break ();
             }
             return;
 
@@ -1467,14 +1360,14 @@ append_out_val_to_buffer ()
 {
     if (out_val < 0 || (out_val == 0 && last_sign < 0))
     {
-        app (u8'-');
+        out_buf.append (u8'-');
     }
     else if (out_sign > 0)
     {
-        app (out_sign);
+        out_buf.append (out_sign);
     }
-    app_val (std::abs (out_val));
-    check_break ();
+    out_buf.append_value (std::abs (out_val));
+    out_buf.flush_line_if_too_long ();
 }
 
 // section 104, 105
@@ -1521,7 +1414,7 @@ send_sign (int v)
         break;
 
     default:
-        break_index = out_buf.size ();
+        out_buf.mark_break ();
         out_app   = v;
         out_state = sign;
         break;
@@ -1550,8 +1443,8 @@ send_val (int v)
         out_sign  = u8' ';
         out_state = sign_val;
         out_val   = v;
-        break_index = out_buf.size ();
-        last_sign   = 1_r;
+        out_buf.mark_break ();
+        last_sign = 1_r;
         return;
 
     case misc:
@@ -1561,8 +1454,8 @@ send_val (int v)
         out_sign  = 0;
         out_state = sign_val;
         out_val   = v;
-        break_index = out_buf.size ();
-        last_sign   = 1_r;
+        out_buf.mark_break ();
+        last_sign = 1_r;
         return;
 
     case sign:
@@ -1599,25 +1492,17 @@ send_val (int v)
 bool
 previous_output_was_mult_or_div ()
 {
-    return out_buf.size () == break_index + 1
-        && (out_buf [break_index] == u8'*' || out_buf [break_index] == u8'/');
+    auto s = out_buf.temporary_view_after_break ();
+    return s == u8"*" || s == u8"/";
 }
 
 // section 110
 
 bool
-out_buf_was (ascii_code_t a, ascii_code_t b, ascii_code_t c)
-{
-    auto iter = out_buf.end () - 3;
-    return *iter == a && *(++iter) == b && *(++iter) == c;
-}
-
-bool
 previous_output_was_div_or_mod ()
 {
-    return (out_buf.size () == break_index + 3_r
-            || (out_buf.size () == break_index + 4_r && out_buf [break_index] == u8' '))
-        && (out_buf_was (u8'D', u8'I', u8'V') || out_buf_was (u8'M', u8'O', u8'D'));
+    auto s = out_buf.temporary_view_after_break ();
+    return s == u8"DIV" || s == u8"MOD" || s == u8" DIV" || s == u8" MOD";
 }
 
 // section 111
@@ -1629,20 +1514,20 @@ append_decimal (int v)
     {
         if (out_state == num_or_id)
         {
-            break_index = out_buf.size ();
-            app (u8' ');
+            out_buf.mark_break ();
+            out_buf.append (u8' ');
         }
-        app_val (v);
-        check_break ();
+        out_buf.append_value (v);
+        out_buf.flush_line_if_too_long ();
         out_state = num_or_id;
     }
     else
     {
-        app (u8'(');
-        app (u8'-');
-        app_val (-v);
-        app (u8')');
-        check_break ();
+        out_buf.append (u8'(');
+        out_buf.append (u8'-');
+        out_buf.append_value (-v);
+        out_buf.append (u8')');
+        out_buf.flush_line_if_too_long ();
         out_state = misc;
     }
 }
@@ -1667,7 +1552,11 @@ output_compressed_tables (terminal &term)
         initialize_output_stacks ();
         initialize_output_buffer ();
         send_the_output ();
-        empty_last_line_from_buffer (term);
+        out_buf.flush_last_line ();
+        if (brace_level != 0)
+        {
+            err.err_print ("! Program ended at brace level {}", brace_level);
+        }
         term.print_nl ("Done.");
     }
 }
@@ -2090,14 +1979,7 @@ void
 force_line_break ()
 {
     send_out (str, {});  // normalize buffer
-    while (!out_buf.empty ())
-    {
-        if (out_buf.size () <= line_length)
-        {
-            break_index = out_buf.size ();
-        }
-        flush_buffer (term);
-    }
+    out_buf.flush_all ();
     out_state = misc;
 }
 
@@ -3410,6 +3292,9 @@ tangle (
     change_file.assign (change_file_name);
     pascal_file.assign (pascal_file_name);
     pool.assign (pool_file_name);
+
+    out_buf.set_on_new_line (on_new_line);
+    out_buf.set_on_line_truncated (on_line_truncated);
 
     initialize ();
     initialize_input_system ();

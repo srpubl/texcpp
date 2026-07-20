@@ -52,3 +52,25 @@ transformation independently of the other transformations. It helps to first mak
 write send_out (str, {&buffer [1], n}), and in a second step adapt the indices and write 
 send_out (str, {buffer.data(), n}). 
 
+### Bundling all references to out_buf in its own class out_buffer
+
+We create the class first with all members public. Out_buf becomes the first member called buffer. We keep the 
+original out_buf but make it of type out_buffer. We then replace all occurences of out_buf by out_buf.buffer. 
+As renaming doesn't work because of the dot, we use a trick: we rename out_buf to out_buf_buffer and then use
+text replacement on that name. C&T.
+
+We then do the same for all other new members: break_index, semi_index, line. After every member we C&T. For line
+need to be careful: Knuth reuses the line from the input system; we disentangle those two and change only the
+references to line when it is the output line.
+
+Then we move small functions to buffer: app (renamed to append), app_val (append_value). flush_buffer (flush_line) can
+now follow: everything referenced inside there is already in out_buffer. force_line_break will not be moved in its
+entirety because it contains references to send_out and out_state, both of which will not be part of out_buffer.
+Similarly, we disentangle empty_last_line_from_buffer (flush_last_line). 
+
+We now want to make members private. Again we proceed stepwise. Realizing that most calls to buffer are actually:
+
+out_buf.break_index = out_buf.buffer.size ();
+
+We make that a function mark_break along with its companion mark_semicolon. The other use case is to check what's
+inside the buffer, either all or after the break. So we added temporary_view and temporary_view_after_break.
