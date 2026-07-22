@@ -74,3 +74,36 @@ out_buf.break_index = out_buf.buffer.size ();
 
 We make that a function mark_break along with its companion mark_semicolon. The other use case is to check what's
 inside the buffer, either all or after the break. So we added temporary_view and temporary_view_after_break.
+
+### out_processor
+
+The variables out_state, out_val, out_app, out_sign, last_sign are highly coherent. We move them into a class
+out_processor with similar steps as for out_buffer. Renaming of functions was crucial as the original names hid
+their intents. We now have streamlined names: commit_x transfers x to the out_buffer for good; those are all
+private. process_x form the public interface of the class, which receive x, change the internal state accordingly
+and occassionally commits something to the out_buffer. 
+
+We also rename out_val to accumulator to more closely follow processor naming. out_sign gets renamed next_sign (to 
+avoid naming conflict with the state called sign). out_app has two completely separate purposes: it serves as 
+the pending sign and the pending second value (there is an optimization that chains of additions/subtractions 
+of literals get merged into a single lingle). That optimization makes the system extremely hard to understand.
+We therefore split out_app into two distinct members pending_sign and pending_addend. It then turns out that 
+last_sign and pending_sign can be the same variable.
+
+Restructuring the original state machine in prepare_buffer_for_append (commit_accumulator_if_necessary) is a major
+task: In the original tangle, it is a big switch with many gotos. We implemented it already as a while loop with 
+a switch inside. Careful analysis reveals that in the worst case the while loop terminates rather quickly as
+states progress only in one direction. Essentially, it is a complicated way of specifying a related class of 
+instruction sequences. 
+
+First, we make those sequences explicit per state. Then we realize that all the if's depend on the type, which is 
+hard-coded for each call to send_out. We therefore make an explicit version per type: process_string, 
+process_fraction, process_identifier and process_single_char (for misc). (process_sign and process_value were 
+already separate functions.) 
+
+Inside the state machine, we merge the states num_or_id and misc because they are nearly similar (adding an 
+additional if (state == num_or_id) inside). We can then move this out of the switch at the end of the function
+and in the next step move it from there after each call-site. There finally, we can replace type with the
+actual type used and reduce it (e.g. in process_fraction it vanished completely). The state machine thus gets 
+reduced to 4 states with simple code and 4 process_x functions with 3 to 12 lines of code, each.
+

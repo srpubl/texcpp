@@ -14,6 +14,7 @@
 #include "character.h"
 #include "error.h"
 #include "out_buffer.h"
+#include "out_processor.h"
 #include "tangle.h"
 #include "terminal.h"
 
@@ -1210,30 +1211,9 @@ copy_parameter_to_tok_mem ()
 // section 94
 // section 95
 
-/// state associated with special characters
-constexpr uint8_t misc          = 0;
-constexpr uint8_t num_or_id     = 1;                 /// state associated with numbers and identifiers
-constexpr uint8_t sign          = 2;                 /// state associated with pending + or −
-constexpr uint8_t sign_val      = num_or_id + 2;     /// state associated with pending sign and value
-constexpr uint8_t sign_val_sign = sign + 2;          /// sign val followed by another pending sign
-constexpr uint8_t sign_val_val  = sign_val + 2;      /// sign val followed by another pending value
-constexpr uint8_t unbreakable   = sign_val_val + 1;  /// state associated with @&
-
-auto              out_state     = misc;             /// current status of partial output
-auto              out_val       = 0;                /// pending values
-auto              out_app       = 0;                /// pending values
-auto              out_sign      = ascii_code_t {};  /// sign to use if appending out_val >= 0
-using sign_t                    = pascal::int_range<-1, 1>;
-auto last_sign                  = sign_t {};  /// sign to use if appending a zero
+auto out_proc = out_processor {out_buf};
 
 // section 96
-
-void
-initialize_output_buffer ()
-{
-    out_state   = misc;
-}
-
 // section 97
 
 void
@@ -1254,284 +1234,22 @@ void
 on_line_truncated ()
 { err.err_print ("! Long line must be truncated"); }
 
+void
+on_missing_sign_between_numbers ()
+{ err.err_print ("! Two numbers occurred without a sign between them"); }
+
 // section 98
 // section 99
 // section 100
-
-constexpr auto str   = 1;  /// send_out code for a string
-constexpr auto ident = 2;  /// send_out code for an identifier
-constexpr auto frac  = 3;  /// send_out code for a fraction
-
 // section 101
-
-void
-prepare_buffer_for_append (uint8_t type, std::u8string_view content);
-
-// outputs v elements of type type
-void
-send_out (uint8_t type, std::u8string_view content)
-{
-    prepare_buffer_for_append (type, content);
-
-    for (auto c: content) { out_buf.append (c); }
-
-    out_buf.flush_line_if_too_long ();
-
-    out_state = (type >= ident ? num_or_id : misc);
-}
-
-void
-send_out_misc (uint16_t v)
-{
-    ascii_code_t c = v & 0xFF;
-    prepare_buffer_for_append (misc, {&c, 1});
-    out_buf.append (c);
-
-    out_buf.flush_line_if_too_long ();
-
-    if (c == u8';' || c == u8'}')
-    {
-        out_buf.mark_break ();
-        out_buf.mark_semicolon ();
-    }
-
-    out_state = misc;
-}
-
-
 // section 102
-
-void
-append_out_val_to_buffer ();
-void
-reduce_sign_val_val (uint8_t type, std::u8string_view content);
-
-void
-prepare_buffer_for_append (uint8_t type, std::u8string_view content)
-{
-    while (true)
-    {
-        switch (out_state)
-        {
-        case num_or_id:
-            if (type != frac)
-            {
-                out_buf.mark_break ();
-                if (type == ident)
-                {
-                    out_buf.append (u8' ');
-                }
-            }
-            return;
-
-        case sign:
-            out_buf.append (u8',' - out_app);
-            out_buf.flush_line_if_too_long ();
-            out_buf.mark_break ();
-            return;
-
-        case sign_val:
-        case sign_val_sign:
-            append_out_val_to_buffer ();
-            out_state -= 2;
-            continue;
-
-        case sign_val_val:
-            reduce_sign_val_val (type, content);
-            out_state = sign_val;
-            continue;
-
-        case misc:
-            if (type != frac)
-            {
-                out_buf.mark_break ();
-            }
-            return;
-
-        default: return;
-        }
-    }
-}
-
 // section 103
-
-void
-append_out_val_to_buffer ()
-{
-    if (out_val < 0 || (out_val == 0 && last_sign < 0))
-    {
-        out_buf.append (u8'-');
-    }
-    else if (out_sign > 0)
-    {
-        out_buf.append (out_sign);
-    }
-    out_buf.append_value (std::abs (out_val));
-    out_buf.flush_line_if_too_long ();
-}
-
 // section 104, 105
-
-bool
-contribution_is_mult_div_mod (uint8_t type, std::u8string_view content);
-
-void
-reduce_sign_val_val (uint8_t type, std::u8string_view content)
-{
-    if (type == frac
-        || (type == ident && (content.compare (u8"DIV") == 0 || content.compare (u8"MOD") == 0))
-        || (type == misc && (content.compare (u8"*") == 0 || content.compare (u8"/") == 0)))
-    {
-        append_out_val_to_buffer ();
-        out_sign = u8'+';
-        out_val  = out_app;
-    }
-    else
-    {
-        out_val += out_app;
-    }
-}
-
 // section 106
-
-void
-send_sign (int v)
-{
-    switch (out_state)
-    {
-    case sign:
-    case sign_val_sign: out_app *= v; break;
-
-    case sign_val:
-        out_app   = v;
-        out_state = sign_val_sign;
-        break;
-
-    case sign_val_val:
-        out_val += out_app;
-        out_app   = v;
-        out_state = sign_val_sign;
-        break;
-
-    default:
-        out_buf.mark_break ();
-        out_app   = v;
-        out_state = sign;
-        break;
-    }
-
-    last_sign = sign_t {out_app};
-}
-
 // section 107, 108
-bool
-previous_output_was_mult_or_div ();
-bool
-previous_output_was_div_or_mod ();
-void
-append_decimal (int v);
-
-void
-send_val (int v)
-{
-    switch (out_state)
-    {
-    case num_or_id:
-        if (previous_output_was_div_or_mod ())
-            break;
-
-        out_sign  = u8' ';
-        out_state = sign_val;
-        out_val   = v;
-        out_buf.mark_break ();
-        last_sign = 1_r;
-        return;
-
-    case misc:
-        if (previous_output_was_mult_or_div ())
-            break;
-
-        out_sign  = 0;
-        out_state = sign_val;
-        out_val   = v;
-        out_buf.mark_break ();
-        last_sign = 1_r;
-        return;
-
-    case sign:
-        out_sign  = u8'+';
-        out_state = sign_val;
-        out_val   = out_app * v;
-        return;
-
-    case sign_val:
-        out_state = sign_val_val;
-        out_app   = v;
-        err.err_print ("! Two numbers occurred without a sign between them");
-        return;
-
-    case sign_val_sign:
-        out_state = sign_val_val;
-        out_app *= v;
-        return;
-
-    case sign_val_val:
-        out_val += out_app;
-        out_app = v;
-        err.err_print ("! Two numbers occurred without a sign between them");
-        return;
-
-    default: break;
-    }
-
-    append_decimal (v);
-}
-
 // section 109
-
-bool
-previous_output_was_mult_or_div ()
-{
-    auto s = out_buf.temporary_view_after_break ();
-    return s == u8"*" || s == u8"/";
-}
-
 // section 110
-
-bool
-previous_output_was_div_or_mod ()
-{
-    auto s = out_buf.temporary_view_after_break ();
-    return s == u8"DIV" || s == u8"MOD" || s == u8" DIV" || s == u8" MOD";
-}
-
 // section 111
-
-void
-append_decimal (int v)
-{
-    if (v >= 0)
-    {
-        if (out_state == num_or_id)
-        {
-            out_buf.mark_break ();
-            out_buf.append (u8' ');
-        }
-        out_buf.append_value (v);
-        out_buf.flush_line_if_too_long ();
-        out_state = num_or_id;
-    }
-    else
-    {
-        out_buf.append (u8'(');
-        out_buf.append (u8'-');
-        out_buf.append_value (-v);
-        out_buf.append (u8')');
-        out_buf.flush_line_if_too_long ();
-        out_state = misc;
-    }
-}
-
 // section 112
 
 void
@@ -1550,7 +1268,6 @@ output_compressed_tables (terminal &term)
         term.print_nl ("Writing the output file");
         term.update ();
         initialize_output_stacks ();
-        initialize_output_buffer ();
         send_the_output ();
         out_buf.flush_last_line ();
         if (brace_level != 0)
@@ -1582,8 +1299,6 @@ void
 send_output_string ();
 void
 send_output_verbatim_string ();
-void
-force_line_break ();
 
 void
 send_output_one_char (ascii_code_t cur_char)
@@ -1632,7 +1347,7 @@ send_output_one_char (ascii_code_t cur_char)
         case u8'_':
         case u8'`':
         case u8'{':
-        case u8'|' : send_out_misc (cur_char); return;
+        case u8'|' : out_proc.process_single_char (cur_char); return;
         }
 
         if (send_output_brace_case (cur_char))
@@ -1642,26 +1357,28 @@ send_output_one_char (ascii_code_t cur_char)
         {
         case 0    : return;
 
-        case u8'+':
-        case u8'-': send_sign (u8',' - cur_char); return;
+        case u8'+': 
+            out_proc.process_sign (+1); return;
+        case u8'-': 
+            out_proc.process_sign (-1); return;
 
         case u8'\'':
             send_output_string ();
             cur_char = static_cast<ascii_code_t> (get_output () & 0xFF);
             if (cur_char == '\'')
             {
-                out_state = unbreakable;
+                out_proc.ensure_no_line_break();
             }
             continue;
 
         case join:
-            send_out (frac, {});
-            out_state = unbreakable;
+            out_proc.process_fraction({});
+            out_proc.ensure_no_line_break ();
             return;
 
         case verbatim  : send_output_verbatim_string (); return;
 
-        case force_line: force_line_break (); return;
+        case force_line: out_proc.force_line_break (); return;
 
         default        : err.err_print ("! Can't output ASCII code {}", static_cast<uint8_t> (cur_char));
         }
@@ -1681,16 +1398,16 @@ send_output_operator (ascii_code_t cur_char) -> bool
 {
     switch (cur_char)
     {
-    case and_sign        : send_out (ident, u8"AND"); return true;
-    case not_sign        : send_out (ident, u8"NOT"); return true;
-    case set_element_sign: send_out (ident, u8"IN"); return true;
-    case or_sign         : send_out (ident, u8"OR"); return true;
-    case left_arrow      : send_out (str, u8":="); return true;
-    case not_equal       : send_out (str, u8"<>"); return true;
-    case less_or_equal   : send_out (str, u8"<="); return true;
-    case greater_or_equal: send_out (str, u8">="); return true;
-    case equivalence_sign: send_out (str, u8"=="); return true;
-    case double_dot      : send_out (str, u8".."); return true;
+    case and_sign        : out_proc.process_identifier (u8"AND"); return true;
+    case not_sign        : out_proc.process_identifier (u8"NOT"); return true;
+    case set_element_sign: out_proc.process_identifier (u8"IN"); return true;
+    case or_sign         : out_proc.process_identifier (u8"OR"); return true;
+    case left_arrow      : out_proc.process_string (u8":="); return true;
+    case not_equal       : out_proc.process_string (u8"<>"); return true;
+    case greater_or_equal: out_proc.process_string (u8">="); return true;
+    case equivalence_sign: out_proc.process_string (u8"=="); return true;
+    case less_or_equal   : out_proc.process_string (u8"<="); return true;
+    case double_dot      : out_proc.process_string (u8".."); return true;
     }
 
     return false;
@@ -1705,14 +1422,14 @@ send_output_identifier (ascii_code_t cur_char) -> bool
 {
     if (is_upper (cur_char))
     {
-        send_out (ident, {&cur_char, 1});
+        out_proc.process_identifier ({&cur_char, 1});
         return true;
     }
 
     if (is_lower (cur_char))
     {
         cur_char -= 040;
-        send_out (ident, {&cur_char, 1});
+        out_proc.process_identifier ({&cur_char, 1});
         return true;
     }
 
@@ -1736,7 +1453,7 @@ send_output_identifier (ascii_code_t cur_char) -> bool
             }
         }
 
-        send_out (ident, {buffer.data (), k});
+        out_proc.process_identifier({buffer.data (), k});
         return true;
     }
 
@@ -1766,7 +1483,7 @@ send_output_string ()
     {
         err.err_print ("! String too long");
     }
-    send_out (str, {buffer.data (), k + 1});
+    out_proc.process_string ({buffer.data (), k + 1});
 }
 
 // section 118
@@ -1791,7 +1508,7 @@ send_output_verbatim_string ()
     {
         err.err_print ("! Verbatim string too long");
     }
-    send_out (str, {buffer.data (), (size_t) k - 1});
+    out_proc.process_string ({buffer.data (), (size_t) k - 1});
 }
 
 // section 119
@@ -1814,7 +1531,7 @@ send_out_number (ascii_code_t &cur_char, int base, int limit, bool (*is_valid) (
         cur_char = get_output () & 0xFF;
     }
     while (is_valid (cur_char));
-    send_val (n);
+    out_proc.process_value (n);
 }
 
 void
@@ -1841,7 +1558,7 @@ send_output_constant (ascii_code_t &cur_char) -> send_output_cases
 
     switch (cur_char)
     {
-    case check_sum: send_val (pool_check_sum); return send_output_cases::consumed;
+    case check_sum: out_proc.process_value (pool_check_sum); return send_output_cases::consumed;
 
     case octal:
         cur_char = u8'0';
@@ -1853,13 +1570,13 @@ send_output_constant (ascii_code_t &cur_char) -> send_output_cases
         send_out_number (cur_char, 16, 0x8000000, is_hex);
         return send_output_cases::reswitch;
 
-    case number: send_val (cur_val); return send_output_cases::consumed;
+    case number: out_proc.process_value (cur_val); return send_output_cases::consumed;
 
     case u8'.':
         cur_char          = get_output () & 0xFF;
         if (cur_char == u8'.')
         {
-            send_out (str, u8"..");
+            out_proc.process_string (u8"..");
             return send_output_cases::consumed;
         }
         
@@ -1869,7 +1586,7 @@ send_output_constant (ascii_code_t &cur_char) -> send_output_cases
             return send_output_cases::reswitch;
         }
         
-        send_out_misc (u8'.');
+        out_proc.process_single_char (u8'.');
         return send_output_cases::reswitch;
     }
     return send_output_cases::not_consumed;
@@ -1920,7 +1637,7 @@ finish_real_constant (ascii_code_t &cur_char, bool start_with_dot)
         err.err_print ("! Fraction too long");
     }
 
-    send_out (frac, {buffer.data (), k});
+    out_proc.process_fraction({buffer.data (), k});
 }
 
 // section 121
@@ -1929,12 +1646,12 @@ send_output_brace_case (ascii_code_t cur_char) -> bool
 {
     switch (cur_char)
     {
-    case begin_comment: send_out_misc (brace_level++ == 0 ? u8'{' : u8'['); return true;
+    case begin_comment: out_proc.process_single_char (brace_level++ == 0 ? u8'{' : u8'['); return true;
 
     case end_comment:
         if (brace_level > 0)
         {
-            send_out_misc (--brace_level == 0 ? u8'}' : u8']');
+            out_proc.process_single_char (--brace_level == 0 ? u8'}' : u8']');
         }
         else
         {
@@ -1965,7 +1682,7 @@ send_output_brace_case (ascii_code_t cur_char) -> bool
         }
 
         *write_ptr++ = (brace_level == 0 ? u8'}' : u8']');
-        send_out (str, {buffer.data (), write_ptr});
+        out_proc.process_string ({buffer.data (), write_ptr});
         return true;
     }
     }
@@ -1973,16 +1690,6 @@ send_output_brace_case (ascii_code_t cur_char) -> bool
 }
 
 // section 122
-
-
-void
-force_line_break ()
-{
-    send_out (str, {});  // normalize buffer
-    out_buf.flush_all ();
-    out_state = misc;
-}
-
 // section 123 nothing tbd
 
 // section 124
@@ -2747,7 +2454,7 @@ enum class scan_numeric_cases
 };
 
 auto
-scan_numeric_one (int &accumulator, sign_t &next_sign) -> scan_numeric_cases
+scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 {
     int            val = 0;
     name_pointer_t q;
@@ -2845,7 +2552,7 @@ void
 scan_numeric (name_pointer_t p)
 {
     int                accumulator = 0;    /// accumulates sums
-    sign_t             next_sign   = 1_r;  /// sign to attach to next value
+    int             next_sign   = 1;  /// sign to attach to next value
 
     scan_numeric_cases state;
     do
@@ -3295,6 +3002,7 @@ tangle (
 
     out_buf.set_on_new_line (on_new_line);
     out_buf.set_on_line_truncated (on_line_truncated);
+    out_proc.set_on_missing_sign_between_numbers (on_missing_sign_between_numbers);
 
     initialize ();
     initialize_input_system ();
