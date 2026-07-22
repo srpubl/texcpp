@@ -1021,7 +1021,7 @@ copy_parameter_to_tok_mem ();
 
 /// returns next token after macro expansion
 uint16_t
-get_output ()
+get_output_impl ()
 {
     while (true)  // because we need to restart once in a while
     {
@@ -1135,6 +1135,31 @@ get_output ()
         cur_mod = mod_pointer_t {cur_val};
         return a;
     }
+}
+
+int last_char;
+
+ascii_code_t
+get_output ()
+{ 
+    if (last_char < 0)
+        return static_cast<ascii_code_t> (get_output_impl () & 0xFF); 
+
+    ascii_code_t res = static_cast<ascii_code_t> (last_char & 0xFF);
+    last_char        = -1;
+    return res;
+}
+
+void
+put_back_output (ascii_code_t c)
+{ last_char = c; }
+
+ascii_code_t
+peek_output ()
+{
+    auto c = get_output ();
+    put_back_output (c);
+    return c;
 }
 
 // section 91
@@ -1280,184 +1305,184 @@ output_compressed_tables (terminal &term)
 
 // section 113
 
-enum class send_output_cases
-{
-    not_consumed,
-    consumed,
-    reswitch
-};
+#define DEF_CASE(x) case x:
 
-auto
-send_output_identifier (ascii_code_t cur_char) -> bool;
-auto
-send_output_constant (ascii_code_t &cur_char) -> send_output_cases;
-auto
-send_output_operator (ascii_code_t cur_char) -> bool;
-auto
-send_output_brace_case (ascii_code_t cur_char) -> bool;
+#define DEF_2_CASES_FROM(x) DEF_CASE (x) DEF_CASE (x + 1)
+#define DEF_4_CASES_FROM(x) DEF_2_CASES_FROM (x) DEF_2_CASES_FROM (x + 2)
+#define DEF_8_CASES_FROM(x) DEF_4_CASES_FROM (x) DEF_4_CASES_FROM (x + 4)
+#define DEF_10_CASES_FROM(x) DEF_8_CASES_FROM (x) DEF_2_CASES_FROM (x + 8)
+#define DEF_16_CASES_FROM(x) DEF_8_CASES_FROM (x) DEF_8_CASES_FROM (x + 8)
+#define DEF_26_CASES_FROM(x) DEF_16_CASES_FROM (x) DEF_10_CASES_FROM (x + 16)
+
+void
+send_output_identifier ();
+void
+send_output_module_number ();
 void
 send_output_string ();
 void
 send_output_verbatim_string ();
+void
+send_out_number (ascii_code_t cur_char, int base, int limit, bool (*is_valid) (ascii_code_t));
+void
+finish_real_constant (bool);
 
 void
-send_output_one_char (ascii_code_t cur_char)
+send_output_dot ()
 {
-    while (true)
+    switch (peek_output ())
     {
-        if (send_output_identifier (cur_char))
-            return;
+    case u8'.':
+        get_output ();  // consume it
+        out_proc.process_string (u8"..");
+        break;
 
-        switch (send_output_constant (cur_char))
-        {
-        case send_output_cases::not_consumed: break;
-        case send_output_cases::consumed    : return;
-        case send_output_cases::reswitch    : continue;
+        DEF_10_CASES_FROM ('0')
+        finish_real_constant (true);
+        break;
+
+    default: out_proc.process_single_char (u8'.');
+    }
+}
+
+void
+send_output_begin_comment ()
+{ out_proc.process_single_char (brace_level++ == 0 ? u8'{' : u8'['); }
+
+void
+send_output_end_comment ()
+{
+    if (brace_level > 0)
+    {
+        out_proc.process_single_char (--brace_level == 0 ? u8'}' : u8']');
+    }
+    else
+    {
+        err.err_print ("! Extra @}}");
+    }
+}
+
+void
+send_output_one_char ()
+{
+    ascii_code_t cur_char = get_output();
+    switch (cur_char)
+    {
+    case 0    : break;
+
+    DEF_10_CASES_FROM ('0')
+        send_out_number (cur_char, 10, 0xCCCCCCC, is_digit);
+        switch (peek_output ())
+        { 
+        case u8'e':
+        case u8'E': finish_real_constant (false);
         }
+        break;
 
-        if (send_output_operator (cur_char))
-            return;
+    DEF_26_CASES_FROM (u8'A')
+        out_proc.process_identifier ({&cur_char, 1});
+        break;
 
-        // section 115
-        // other printable characters
-        switch (cur_char)
-        {
-        case u8'!':
-        case u8'"':
-        case u8'#':
-        case u8'$':
-        case u8'%':
-        case u8'&':
-        case u8'(':
-        case u8')':
-        case u8'*':
-        case u8',':
-        case u8'/':
-        case u8':':
-        case u8';':
-        case u8'<':
-        case u8'=':
-        case u8'>':
-        case u8'?':
-        case u8'@':
-        case u8'[':
-        case u8'\\':
-        case u8']':
-        case u8'^':
-        case u8'_':
-        case u8'`':
-        case u8'{':
-        case u8'|' : out_proc.process_single_char (cur_char); return;
-        }
+    DEF_26_CASES_FROM (u8'a')
+        cur_char -= 040;
+        out_proc.process_identifier ({&cur_char, 1});
+        break;
 
-        if (send_output_brace_case (cur_char))
-            return;
+    case u8'!':
+    case u8'"':
+    case u8'#':
+    case u8'$':
+    case u8'%':
+    case u8'&':
+    case u8'(':
+    case u8')':
+    case u8'*':
+    case u8',':
+    case u8'/':
+    case u8':':
+    case u8';':
+    case u8'<':
+    case u8'=':
+    case u8'>':
+    case u8'?':
+    case u8'@':
+    case u8'[':
+    case u8'\\':
+    case u8']':
+    case u8'^':
+    case u8'_':
+    case u8'`':
+    case u8'{':
+    case u8'|'           : out_proc.process_single_char (cur_char); break;
+    
+    case u8'\''          : send_output_string (); break;
+    case u8'.'           : send_output_dot (); break;
+    case u8'+'           : out_proc.process_sign (+1); break;
+    case u8'-'           : out_proc.process_sign (-1); break;
+    case and_sign        : out_proc.process_identifier (u8"AND"); break;
+    case not_sign        : out_proc.process_identifier (u8"NOT"); break;
+    case set_element_sign: out_proc.process_identifier (u8"IN"); break;
+    case or_sign         : out_proc.process_identifier (u8"OR"); break;
+    case not_equal       : out_proc.process_string (u8"<>"); break;
+    case greater_or_equal: out_proc.process_string (u8">="); break;
+    case equivalence_sign: out_proc.process_string (u8"=="); break;
+    case left_arrow      : out_proc.process_string (u8":="); break;
+    case less_or_equal   : out_proc.process_string (u8"<="); break;
+    case double_dot      : out_proc.process_string (u8".."); break;
+    case begin_comment   : send_output_begin_comment (); break;
+    case end_comment     : send_output_end_comment (); break;
+    case identifier      : send_output_identifier (); break;
+    case module_number   : send_output_module_number (); break;
+    case verbatim        : send_output_verbatim_string (); break;
+    case octal           : send_out_number (u8'0', 8, 0x10000000, is_octal); break;
+    case hex             : send_out_number (u8'0', 16, 0x8000000, is_hex); break;
+    case number          : out_proc.process_value (cur_val); break;
+    case check_sum       : out_proc.process_value (pool_check_sum); break;
+    case force_line      : out_proc.force_line_break (); break;
 
-        switch (cur_char)
-        {
-        case 0    : return;
+    case join:
+        out_proc.process_fraction({});
+        out_proc.ensure_no_line_break ();
+        break;
 
-        case u8'+': 
-            out_proc.process_sign (+1); return;
-        case u8'-': 
-            out_proc.process_sign (-1); return;
-
-        case u8'\'':
-            send_output_string ();
-            cur_char = static_cast<ascii_code_t> (get_output () & 0xFF);
-            if (cur_char == '\'')
-            {
-                out_proc.ensure_no_line_break();
-            }
-            continue;
-
-        case join:
-            out_proc.process_fraction({});
-            out_proc.ensure_no_line_break ();
-            return;
-
-        case verbatim  : send_output_verbatim_string (); return;
-
-        case force_line: out_proc.force_line_break (); return;
-
-        default        : err.err_print ("! Can't output ASCII code {}", static_cast<uint8_t> (cur_char));
-        }
+    default        : 
+        err.err_print ("! Can't output ASCII code {}", static_cast<uint8_t> (cur_char));
+        break;
     }
 }
 
 void
 send_the_output ()
 {
-    while (stack_ptr > 0) { send_output_one_char (static_cast<ascii_code_t> (get_output () & 0xFF)); }
+    while (stack_ptr > 0 || last_char >= 0) { send_output_one_char (); }
 }
 
 // section 114
-
-auto
-send_output_operator (ascii_code_t cur_char) -> bool
-{
-    switch (cur_char)
-    {
-    case and_sign        : out_proc.process_identifier (u8"AND"); return true;
-    case not_sign        : out_proc.process_identifier (u8"NOT"); return true;
-    case set_element_sign: out_proc.process_identifier (u8"IN"); return true;
-    case or_sign         : out_proc.process_identifier (u8"OR"); return true;
-    case left_arrow      : out_proc.process_string (u8":="); return true;
-    case not_equal       : out_proc.process_string (u8"<>"); return true;
-    case greater_or_equal: out_proc.process_string (u8">="); return true;
-    case equivalence_sign: out_proc.process_string (u8"=="); return true;
-    case less_or_equal   : out_proc.process_string (u8"<="); return true;
-    case double_dot      : out_proc.process_string (u8".."); return true;
-    }
-
-    return false;
-}
-
 // section 115 incorporated in section 113
-
 // section 116
 
-auto
-send_output_identifier (ascii_code_t cur_char) -> bool
+void
+send_output_identifier ()
 {
-    if (is_upper (cur_char))
+    auto   buffer     = std::array<ascii_code_t, max_id_length> {};
+    size_t k          = 0_r;
+    auto [_, bank, j] = locate_byte_mem (name_pointer_t {cur_val});
+    auto end          = byte_start [name_pointer_t {cur_val + ww}];
+    while (k < max_id_length && j < end)
     {
-        out_proc.process_identifier ({&cur_char, 1});
-        return true;
-    }
-
-    if (is_lower (cur_char))
-    {
-        cur_char -= 040;
-        out_proc.process_identifier ({&cur_char, 1});
-        return true;
-    }
-
-    if (cur_char == identifier)
-    {
-        auto   buffer     = std::array<ascii_code_t, max_id_length> {};
-        size_t k          = 0_r;
-        auto [_, bank, j] = locate_byte_mem (name_pointer_t {cur_val});
-        auto end          = byte_start [name_pointer_t {cur_val + ww}];
-        while (k < max_id_length && j < end)
+        auto ch = bank [j++];
+        if (ch >= u8'a')
         {
-            auto ch = bank [j++];
-            if (ch >= u8'a')
-            {
-                ch -= 040;
-            }
-
-            if (ch != '_')
-            {
-                buffer [k++] = ch;
-            }
+            ch -= 040;
         }
 
-        out_proc.process_identifier({buffer.data (), k});
-        return true;
+        if (ch != u8'_')
+        {
+            buffer [k++] = ch;
+        }
     }
 
-    return false;
+    out_proc.process_identifier({buffer.data (), k});
 }
 
 // Section 117
@@ -1475,7 +1500,7 @@ send_output_string ()
         {
             ++k;
         }
-        buffer [k] = ch = get_output () & 0x7F;
+        buffer [k] = ch = get_output ();
     }
     while (ch != u8'\'' && stack_ptr != 0);
 
@@ -1484,6 +1509,10 @@ send_output_string ()
         err.err_print ("! String too long");
     }
     out_proc.process_string ({buffer.data (), k + 1});
+    if (peek_output () == '\'')
+    {
+        out_proc.ensure_no_line_break ();
+    }
 }
 
 // section 118
@@ -1496,7 +1525,7 @@ send_output_verbatim_string ()
     ascii_code_t ch;
     do
     {
-        buffer [k] = ch = get_output () & 0x7F;
+        buffer [k] = ch = get_output ();
         if (k < line_length - 1)
         {
             ++k;
@@ -1514,7 +1543,7 @@ send_output_verbatim_string ()
 // section 119
 
 void
-send_out_number (ascii_code_t &cur_char, int base, int limit, bool (*is_valid) (ascii_code_t))
+send_out_number (ascii_code_t cur_char, int base, int limit, bool (*is_valid) (ascii_code_t))
 {
     int n = 0;
     do
@@ -1528,81 +1557,24 @@ send_out_number (ascii_code_t &cur_char, int base, int limit, bool (*is_valid) (
         {
             n = base * n + digit_value;
         }
-        cur_char = get_output () & 0xFF;
+        cur_char = get_output ();
     }
     while (is_valid (cur_char));
+    put_back_output (cur_char);
     out_proc.process_value (n);
-}
-
-void
-finish_real_constant (ascii_code_t &, bool);
-
-auto
-send_output_constant (ascii_code_t &cur_char) -> send_output_cases
-{
-    if (is_digit (cur_char))
-    {
-        send_out_number (cur_char, 10, 0xCCCCCCC, is_digit);
-
-        if (cur_char == u8'e')
-        {
-            cur_char = u8'E';
-        }
-        if (cur_char == u8'E')
-        {
-            finish_real_constant (cur_char, false);
-        }
-
-        return send_output_cases::reswitch;
-    }
-
-    switch (cur_char)
-    {
-    case check_sum: out_proc.process_value (pool_check_sum); return send_output_cases::consumed;
-
-    case octal:
-        cur_char = u8'0';
-        send_out_number (cur_char, 8, 0x10000000, is_octal);
-        return send_output_cases::reswitch;
-
-    case hex:
-        cur_char = u8'0';
-        send_out_number (cur_char, 16, 0x8000000, is_hex);
-        return send_output_cases::reswitch;
-
-    case number: out_proc.process_value (cur_val); return send_output_cases::consumed;
-
-    case u8'.':
-        cur_char          = get_output () & 0xFF;
-        if (cur_char == u8'.')
-        {
-            out_proc.process_string (u8"..");
-            return send_output_cases::consumed;
-        }
-        
-        if (is_digit (cur_char))
-        {
-            finish_real_constant (cur_char, true);
-            return send_output_cases::reswitch;
-        }
-        
-        out_proc.process_single_char (u8'.');
-        return send_output_cases::reswitch;
-    }
-    return send_output_cases::not_consumed;
 }
 
 // section 120
 
 void
-finish_real_constant (ascii_code_t &cur_char, bool start_with_dot)
+finish_real_constant (bool start_with_dot)
 {  
+    ascii_code_t cur_char = get_output ();
     auto   buffer = std::array<ascii_code_t, line_length> {};
     size_t k      = 0;
     if (start_with_dot)
     {
-        k = 1;
-        buffer [0] = u8'.';
+        buffer [k++] = u8'.';
     }
 
     do
@@ -1614,7 +1586,7 @@ finish_real_constant (ascii_code_t &cur_char, bool start_with_dot)
 
         auto last_char  = cur_char;
         buffer [k - 1]  = cur_char;
-        cur_char        = get_output () & 0xFF;
+        cur_char        = get_output ();
 
         if (last_char == u8'E' && (cur_char == u8'+' || cur_char == u8'-'))
         {
@@ -1623,7 +1595,7 @@ finish_real_constant (ascii_code_t &cur_char, bool start_with_dot)
                 ++k;
             }
             buffer [k - 1] = cur_char;
-            cur_char        = get_output () & 0xFF;
+            cur_char        = get_output ();
         }
         else if (cur_char == u8'e')
         {
@@ -1638,55 +1610,35 @@ finish_real_constant (ascii_code_t &cur_char, bool start_with_dot)
     }
 
     out_proc.process_fraction({buffer.data (), k});
+    put_back_output (cur_char);
 }
 
 // section 121
-auto
-send_output_brace_case (ascii_code_t cur_char) -> bool
+void
+send_output_module_number ()
 {
-    switch (cur_char)
+    constexpr size_t buf_size = max_digits + 3; // digits + 2 braces + 1 colon
+    auto             buffer     = std::array<char8_t, buf_size> {};
+    auto            *write_ptr  = buffer.data ();
+    *write_ptr++                = (brace_level == 0 ? u8'{' : u8'[');
+    if (cur_val < 0)
     {
-    case begin_comment: out_proc.process_single_char (brace_level++ == 0 ? u8'{' : u8'['); return true;
+        *write_ptr++ = u8':';
+        cur_val      = -cur_val;
+    }
 
-    case end_comment:
-        if (brace_level > 0)
-        {
-            out_proc.process_single_char (--brace_level == 0 ? u8'}' : u8']');
-        }
-        else
-        {
-            err.err_print ("! Extra @}}");
-        }
-        return true;
-
-    case module_number:
-    {
-        constexpr size_t buf_size = max_digits + 3; // digits + 2 braces + 1 colon
-        auto             buffer     = std::array<char8_t, buf_size> {};
-        auto            *write_ptr  = buffer.data ();
-        *write_ptr++                = (brace_level == 0 ? u8'{' : u8'[');
-        if (cur_val < 0)
-        {
-            *write_ptr++ = u8':';
-            cur_val      = -cur_val;
-        }
-
-        ascii_code_t digit_buffer [max_digits];
-        auto end   = std::end(digit_buffer);
-        auto begin = to_chars (end, cur_val);
-        write_ptr = std::copy (begin, end, write_ptr); 
+    ascii_code_t digit_buffer [max_digits];
+    auto end   = std::end(digit_buffer);
+    auto begin = to_chars (end, cur_val);
+    write_ptr = std::copy (begin, end, write_ptr); 
         
-        if (buffer[1] != u8':')
-        {
-            *write_ptr++ = u8':';
-        }
+    if (buffer[1] != u8':')
+    {
+        *write_ptr++ = u8':';
+    }
 
-        *write_ptr++ = (brace_level == 0 ? u8'}' : u8']');
-        out_proc.process_string ({buffer.data (), write_ptr});
-        return true;
-    }
-    }
-    return false;
+    *write_ptr++ = (brace_level == 0 ? u8'}' : u8']');
+    out_proc.process_string ({buffer.data (), write_ptr});
 }
 
 // section 122

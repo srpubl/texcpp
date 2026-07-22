@@ -107,3 +107,31 @@ and in the next step move it from there after each call-site. There finally, we 
 actual type used and reduce it (e.g. in process_fraction it vanished completely). The state machine thus gets 
 reduced to 4 states with simple code and 4 process_x functions with 3 to 12 lines of code, each.
 
+### send_output_one_char
+
+We want to get rid of the while loop. So we revamp everything into one big switch as in the original tangle as
+this will make things easier. In order to avoid 62 labels for 0-9A-Za-z, we revert to macros to generate cases
+(there is no other way in C++ except for relying on non-standard syntax). Most things are straightforward, like
+moving cases out of functions back into the big switch. For constants, it's a bit more complicated as the
+function returns three possibilities: consumed, reswitch, not_consumed. We want to get rid of the reswitch
+because then the return value is a boolean (consumed vs not_consumed) as in the other functions.
+
+The only reason reswitch exists is because sometimes we need to peek at the next output token without consuming 
+it. Fortunately, we only need to look ahead one token. So we implement a simple put_back_output that just
+stores one token. We adapt get_output by renaming it and writing a little wrapper get_output around it that
+just checks whether there is an output token that was put back. We need to take care to add an additional
+check to send_the_output as this loop needs to continue if there is still a character that was put back. We
+also implement a little helper peek_output, which will come in handy later.
+
+Now, we can replace all continue statements in our loop by put_back_output(cur_char); return. In 
+send_output_constant, we replace return reswitch with put_back_output(cur_char); return consumed. Thus, we can 
+move all cases from this function to our big switch. We now have no continue or break in that big switch, so
+we can remove the outer while loop and replace all returns with breaks.
+
+We then remove the cur_char parameter from finish_real_constant and instead put the char back before calling
+the function and at its end thus reducing dependencies. We also realize now that send_out_number is always
+followed by put_back_char, so we move that call into it, and pass cur_char by value instead of by reference.
+And now we see that we very often can just use peek_char, making the code much easier to understand. With
+a couple of cleanups we manage to get the switch nicely structured and really easy to comprehend.
+
+
