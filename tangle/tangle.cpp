@@ -33,7 +33,7 @@ constexpr auto banner = "This is a C++ reimplementation of TANGLE, Version 4.6"s
 // section 8
 constexpr size_t buf_size = 100;  /// maximum length of input line
 constexpr size_t max_bytes
-    = 45000;  /// number of bytes in identifiers, strings, and module names; must be < 65536
+    =  2 * 45000;  /// number of bytes in identifiers, strings, and module names; must be < 65536
 constexpr size_t max_toks     = 65000;  /// number of bytes in compressed Pascal code; must be < 65536
 constexpr size_t max_names    = 4000;   /// number of identifiers, strings, module names; must be < 10240
 constexpr size_t max_texts    = 2000;   /// number of replacement texts, must be < 10240
@@ -208,49 +208,47 @@ print_error_location_output (terminal &term)
 // We use uint8_t and uint16_t instead of eight_bits and sixteen_bits
 // section 38
 
-/// we multiply the byte capacity by approximately this amount
-auto constexpr ww     = 2_r;
 auto constexpr zz     = 3_r;  /// we multiply the token capacity by approximately this amount
 
-using name_pointer_t  = pascal::int_range<0, max_names>;  /// identifies a name
+using index_t  = uint32_t;  /// used to store indices in arrays
 using text_pointer_t  = pascal::int_range<0, max_texts>;
 using byte_pointer_t  = pascal::int_range<0, max_bytes>;
 using token_pointer_t = pascal::int_range<0, max_toks>;
 using token_bank_t    = pascal::int_range<0, zz - 1_r>;
-using byte_bank_t     = pascal::int_range<0, ww - 1_r>;
-using byte_mem_bank_t = pascal::array<byte_pointer_t, ascii_code_t>;
 
-auto byte_mem         = pascal::array<byte_bank_t, byte_mem_bank_t> {};  /// characters of names
+auto name_chars       = std::vector<ascii_code_t> {};  /// characters of names
+auto name_start       = std::vector<index_t> {};      /// directory into name_chars
 auto tok_mem = pascal::array<token_bank_t, pascal::array<token_pointer_t, ascii_code_t>> {};  /// tokens
-auto byte_start = pascal::array<name_pointer_t, uint16_t> {};  /// directory into byte mem
-auto tok_start  = pascal::array<text_pointer_t, uint16_t> {};  /// directory into tok mem
-auto link       = pascal::array<name_pointer_t, uint16_t> {};  /// hash table or tree links
-auto ilk        = pascal::array<name_pointer_t, uint16_t> {};  /// type codes or tree links
-auto equiv      = pascal::array<name_pointer_t, uint16_t> {};  /// info corresponding to names
-auto text_link  = pascal::array<text_pointer_t, uint16_t> {};  /// relates replacement texts
 
-auto
-locate_byte_mem (name_pointer_t p)
-{
-    auto w = p % ww;
-    return std::tuple<decltype (w), byte_mem_bank_t &, byte_pointer_t> {w, byte_mem [w], byte_start [p]};
-}
+
+auto tok_start  = pascal::array<text_pointer_t, index_t> {};  /// directory into tok mem
+auto link       = std::array<index_t, max_names> {};  /// hash table or tree links
+auto ilk        = std::array<index_t, max_names> {};  /// type codes or tree links
+auto equiv      = std::array<index_t, max_names> {};  /// info corresponding to names
+auto text_link  = pascal::array<text_pointer_t, index_t> {};  /// relates replacement texts
 
 // section 39
 
 /// length of a name
 auto
-length (name_pointer_t index)
-{ return byte_start [index + ww] - byte_start [index]; }
+length (index_t index)
+{ return name_start [index + 1] - name_start [index]; }
+
+auto 
+name (index_t p)
+{
+    return std::u8string_view {&name_chars [name_start[p]], length (p)};
+}
 
 // name_pointer is name_index_t and we needed to define it alreay in section 38
 
 // section 40
 
-/// first unused position in byte_start
-auto name_ptr   = name_pointer_t {1};
-auto string_ptr = name_pointer_t {256};  /// next number to be given to a string of length > 1
-auto byte_ptr   = pascal::array<byte_bank_t, byte_pointer_t> {};  /// first unused position in byte mem
+auto
+name_ptr ()
+{ return static_cast <index_t> (name_start.size () - 1);}
+
+auto string_ptr = index_t {256};  /// next number to be given to a string of length > 1
 auto pool_check_sum = 271828;  /// sort of a hash for the whole string pool
 
 // section 41, 42, 43 not required (global arrays are zero-initialized in C++),
@@ -283,18 +281,17 @@ auto &rlink = ilk;  /// right link in binary search tree for module names
 // section 49
 
 void
-print_id (terminal term, name_pointer_t p)
+print_id (terminal term, index_t p)
 {
-    if (p >= name_ptr) [[unlikely]]
+    if (p >= name_ptr ()) [[unlikely]]
     {
         term.print ("IMPOSSIBLE");
     }
     else
     {
-        const auto end = byte_start [p + ww];
-        for (auto [_, bank, k] = locate_byte_mem (p); k < end; ++k)
+        for (auto ch : name (p))
         {
-            print (term, bank [k]);
+            print (term, ch);
         }
     }
 }
@@ -306,8 +303,8 @@ using chopped_index_t = pascal::int_range<0, unambig_length>;
 auto id_first         = buf_index_t {};
 auto id_loc           = buf_index_t {};
 auto double_chars     = buf_index_t {};
-auto hash             = pascal::array<hash_index_t, uint16_t> {};
-auto chop_hash        = pascal::array<hash_index_t, uint16_t> {};
+auto hash             = pascal::array<hash_index_t, index_t> {};
+auto chop_hash        = pascal::array<hash_index_t, index_t> {};
 auto chopped_id       = pascal::array<chopped_index_t, ascii_code_t> {};
 
 /// convenience function because this value is used very often
@@ -322,18 +319,18 @@ id_length ()
 auto
 compute_hash_code () -> hash_index_t;
 auto
-compute_name_location (hash_index_t h) -> name_pointer_t;
+compute_name_location (hash_index_t h) -> index_t;
 void
-update_tables (name_pointer_t p, ilk_value t);
+update_tables (index_t p, ilk_value t);
 
 /// Finds current identifier if it exists or stores it.
 auto
-id_lookup (ilk_value t) -> name_pointer_t
+id_lookup (ilk_value t) -> index_t
 {
     hash_index_t   h = compute_hash_code ();
-    name_pointer_t p = compute_name_location (h);
+    index_t p = compute_name_location (h);
 
-    if (p == name_ptr || t != normal)
+    if (p == name_ptr () || t != normal)
     {
         update_tables (p, t);
     }
@@ -357,27 +354,25 @@ compute_hash_code () -> hash_index_t
 
 // section 55
 
-auto
-compare_with_current_identifier (name_pointer_t p) -> bool;
-
 /// Finds the index of the current id (in buffer) into byte_start.
 ///
 /// The hash list is implemented by storing the start of each bucket in hash
 /// and the linked list for each bucket implicitly in link[p] (there must be
 /// at most one successor for each p)
 auto
-compute_name_location (hash_index_t h) -> name_pointer_t
+compute_name_location (hash_index_t h) -> index_t
 {
-    auto p   = name_pointer_t {hash [h]};
-    auto len = id_length ();
+    auto p   = index_t {hash [h]};
+    auto id  = std::u8string_view {&buffer [id_first], id_length ()};
+
     while (p != 0)
     {
-        if (length (p) == len && compare_with_current_identifier (p))
+        if (name (p) == id)
             return p;
 
-        p = name_pointer_t {link [p]};
+        p = index_t {link [p]};
     }
-    p = name_ptr;
+    p = name_ptr ();
 
     // insert p at beginning of hash list
     link [p] = hash [h];
@@ -387,36 +382,28 @@ compute_name_location (hash_index_t h) -> name_pointer_t
 }
 
 // section 56
-
-auto
-compare_with_current_identifier (name_pointer_t p) -> bool
-{
-    auto [_, bank, k] = locate_byte_mem (p);
-    return std::memcmp (&buffer [id_first], &bank [k], id_length ()) == 0;
-}
-
 // section 57
 
 auto
 compute_secondary_hash () -> hash_index_t;
 void
-double_definition_error (name_pointer_t p, ilk_value t, hash_index_t h);
+double_definition_error (index_t p, ilk_value t, hash_index_t h);
 void
-add_new_name (name_pointer_t p, ilk_value t, hash_index_t h);
+add_new_name (index_t p, ilk_value t, hash_index_t h);
 
 /// Update the tables and check for possible errors
 void
-update_tables (name_pointer_t p, ilk_value t)
+update_tables (index_t p, ilk_value t)
 {
     hash_index_t h = 0_r;
 
-    if ((p != name_ptr && t != normal && ilk [p] == normal)
-        || (p == name_ptr && t == normal && buffer [id_first] != u8'"'))
+    if ((p != name_ptr () && t != normal && ilk [p] == normal)
+        || (p == name_ptr () && t == normal && buffer [id_first] != u8'"'))
     {
         h = compute_secondary_hash ();
     }
 
-    if (p != name_ptr)
+    if (p != name_ptr ())
     {
         double_definition_error (p, t, h);
     }
@@ -461,10 +448,10 @@ compute_secondary_hash () -> hash_index_t
 // section 59
 
 void
-remove_from_secondary_hash_table (name_pointer_t p, hash_index_t h);
+remove_from_secondary_hash_table (index_t p, hash_index_t h);
 
 void
-double_definition_error (name_pointer_t p, ilk_value t, hash_index_t h)
+double_definition_error (index_t p, ilk_value t, hash_index_t h)
 {
     if (ilk [p] == normal)  // We have seen p before it was used
     {
@@ -492,16 +479,16 @@ double_definition_error (name_pointer_t p, ilk_value t, hash_index_t h)
 // section 60
 
 void
-remove_from_secondary_hash_table (name_pointer_t p, hash_index_t h)
+remove_from_secondary_hash_table (index_t p, hash_index_t h)
 {
-    auto q = name_pointer_t {chop_hash [h]};
+    auto q = index_t {chop_hash [h]};
     if (q == p)
     {
         chop_hash [h] = equiv [p];
     }
     else
     {
-        while (equiv [q] != p) { q = name_pointer_t {equiv [q]}; }
+        while (equiv [q] != p) { q = index_t {equiv [q]}; }
         equiv [q] = equiv [p];
     }
 }
@@ -509,12 +496,12 @@ remove_from_secondary_hash_table (name_pointer_t p, hash_index_t h)
 // section 61
 
 void
-update_secondary_hash (name_pointer_t p, hash_index_t h);
+update_secondary_hash (index_t p, hash_index_t h);
 void
-add_new_string (name_pointer_t p);
+add_new_string (index_t p);
 
 void
-add_new_name (name_pointer_t p, ilk_value t, hash_index_t h)
+add_new_name (index_t p, ilk_value t, hash_index_t h)
 {
     auto first_char = buffer [id_first];
 
@@ -523,22 +510,14 @@ add_new_name (name_pointer_t p, ilk_value t, hash_index_t h)
         update_secondary_hash (p, h);
     }
 
-    auto [w, bank, _] = locate_byte_mem (name_ptr);
-    auto k            = byte_ptr [w];
-    auto length       = id_length ();
-    auto k_final      = k + length;
-
-    if (k_final > max_bytes)
+    if (name_chars.size () + id_length () > max_bytes)
         err.overflow ("byte memory");
 
-    if (name_ptr > max_names - ww)
+    if (name_ptr () > name_start.size ())
         err.overflow ("name");
 
-    std::memcpy (&bank [k], &buffer [id_first], length);
-
-    byte_ptr [w]               = k_final;
-    byte_start [name_ptr + ww] = k_final;
-    ++name_ptr;
+    name_chars.insert (name_chars.end (), &buffer [id_first], &buffer [id_loc]);
+    name_start.push_back (static_cast<index_t> (name_chars.size ()));
 
     if (first_char != u8'"')
     {
@@ -552,16 +531,16 @@ add_new_name (name_pointer_t p, ilk_value t, hash_index_t h)
 
 // section 62
 void
-check_conflicting_names (name_pointer_t q);
+check_conflicting_names (index_t q);
 
 void
-update_secondary_hash (name_pointer_t p, hash_index_t h)
+update_secondary_hash (index_t p, hash_index_t h)
 {
-    auto q = name_pointer_t {chop_hash [h]};
+    auto q = index_t {chop_hash [h]};
     while (q != 0)
     {
         check_conflicting_names (q);
-        q = name_pointer_t {equiv [q]};
+        q = index_t {equiv [q]};
     }
 
     // put p at front of secondary hash list
@@ -573,20 +552,18 @@ update_secondary_hash (name_pointer_t p, hash_index_t h)
 
 /// Checks whether name indicated by q has same chopped id as the the value in chopped_id
 void
-check_conflicting_names (name_pointer_t q)
+check_conflicting_names (index_t q)
 {
-    chopped_index_t s     = 0_r;
+    chopped_index_t s  = 0_r;
+    auto            id = name (q);
+    size_t          i  = 0;
 
-    auto            end   = byte_pointer_t {byte_start [q + ww]};
-    auto [_, bank, start] = locate_byte_mem (q);
-
-    auto k                = start;
-    for (; k < end; ++k)
-    {
+    for (auto ch : id)
+    { 
+        ++i;
         if (s == unambig_length)
             break;
 
-        auto ch = bank [k];
         if (ch == u8'_')
             continue;
 
@@ -595,17 +572,15 @@ check_conflicting_names (name_pointer_t q)
             ch -= 040;
         }
 
-        if (chopped_id [s] != ch)
+        if (ch != chopped_id [s++])
             return;
-
-        ++s;
     }
 
-    if (k == end && chopped_id [s] != 0)
+    if (i == id.size () && chopped_id [s] != 0)
         return;
 
     err.terminal ().print_nl ("! Identifier conflict with ");
-    for (k = start; k < end; ++k) { print (err.terminal (), bank [k]); }
+    for (auto ch : id) { print (err.terminal (), ch); }
     err.error ();
 }
 
@@ -621,7 +596,7 @@ add_to_checksum (int value)
 }
 
 void
-add_new_string (name_pointer_t p)
+add_new_string (index_t p)
 {
     ilk [p]     = numeric;
     auto length = id_length ();
@@ -672,7 +647,6 @@ using inname_index_t = pascal::int_range<0, longest_name>;
 auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name being sought for
 
 // section 66
-
 enum comparison_result
 {
     less,
@@ -683,16 +657,16 @@ enum comparison_result
 };
 
 auto
-compare_module_names (uint16_t length, name_pointer_t p) -> comparison_result;
+compare_module_names (index_t length, index_t p) -> comparison_result;
 auto
-add_module_name (uint16_t length, comparison_result &c, name_pointer_t q) -> name_pointer_t;
+add_module_name (index_t length, comparison_result &c, index_t q) -> index_t;
 
 auto
-module_lookup (uint16_t length) -> name_pointer_t
+module_lookup (index_t length) -> index_t
 {
     auto c = greater;
-    auto q = name_pointer_t {0};
-    auto p = name_pointer_t {rlink [0_r]};
+    auto q = index_t {0};
+    auto p = index_t {rlink [0_r]};
 
     while (p != 0)
     {
@@ -700,11 +674,11 @@ module_lookup (uint16_t length) -> name_pointer_t
         q = p;
         if (c == less)
         {
-            p = name_pointer_t {llink [q]};
+            p = index_t {llink [q]};
         }
         else if (c == greater)
         {
-            p = name_pointer_t {rlink [q]};
+            p = index_t {rlink [q]};
         }
         else
         {
@@ -723,19 +697,15 @@ module_lookup (uint16_t length) -> name_pointer_t
 // section 67
 
 auto
-add_module_name (uint16_t length, comparison_result &c, name_pointer_t q) -> name_pointer_t
+add_module_name (index_t length, comparison_result &c, index_t q) -> index_t
 {
-    auto [w, bank, _] = locate_byte_mem (name_ptr);
-    auto k            = byte_ptr [w];
-    auto k_final      = byte_pointer_t {k + length};
-
-    if (k_final > max_bytes)
+    if (name_chars.size() + length > max_bytes)
         err.overflow ("byte memory");
 
-    if (name_ptr > max_names - ww)
+    if (name_ptr () > name_start.size ())
         err.overflow ("name");
 
-    auto p = name_ptr;
+    auto p = name_ptr ();
     if (c == less)
     {
         llink [q] = p;
@@ -751,10 +721,8 @@ add_module_name (uint16_t length, comparison_result &c, name_pointer_t q) -> nam
     c         = equal;
     equiv [p] = 0;
 
-    std::memcpy (&bank [k], &mod_text [1_r], length);
-    byte_ptr [w]               = k_final;
-    byte_start [name_ptr + ww] = k_final;
-    ++name_ptr;
+    name_chars.insert (name_chars.end (), &mod_text [1_r], &mod_text [byte_pointer_t {length + 1}]);
+    name_start.push_back (static_cast<index_t> (name_chars.size ()));
 
     return p;
 }
@@ -762,59 +730,53 @@ add_module_name (uint16_t length, comparison_result &c, name_pointer_t q) -> nam
 // section 68
 
 auto
-compare_module_names (uint16_t length, name_pointer_t p) -> comparison_result
+compare_module_names (index_t length, index_t p) -> comparison_result
 {
-    comparison_result c   = equal;
-    inname_index_t    j   = 1_r;
+    auto              old_name  = name (p);
+    auto              new_name = std::u8string_view {&mod_text [1_r], length};
 
-    uint16_t          end = byte_start [p + ww];
-    auto [_, bank, k]     = locate_byte_mem (p);
+    size_t i   = 0;
+    size_t len = std::min (old_name.length (), new_name.length ());
 
-    while (k < end && j <= length && mod_text [j] == bank [k])
+    for (; i < len; ++i)
     {
-        ++k;
-        ++j;
+        auto result = new_name [i] <=> old_name [i];
+        if (result != std::strong_ordering::equal)
+            return result == std::strong_ordering::less ? less : greater;
     }
 
-    if (k == end)
-        return j > length ? equal : extension;
-
-    if (j > length)
-        return prefix;
-
-    if (mod_text [j] < bank [k])
-        return less;
-
-    return greater;
+    return i != old_name.length() ? prefix :
+           i != new_name.length() ? extension : 
+           equal;
 }
 
 // section 69
 
 auto
-prefix_lookup (uint16_t length) -> name_pointer_t
+prefix_lookup (index_t length) -> index_t
 {
-    auto resume_node  = name_pointer_t {0};
-    auto current_node = name_pointer_t {rlink [0_r]};
-    auto count        = name_pointer_t {0};
-    auto result       = name_pointer_t {0};
+    auto resume_node  = index_t {0};
+    auto current_node = index_t {rlink [0_r]};
+    auto count        = index_t {0};
+    auto result       = index_t {0};
 
     while (current_node != 0)
     {
         auto c = compare_module_names (length, current_node);
         if (c == less)
         {
-            current_node = name_pointer_t {llink [current_node]};
+            current_node = index_t {llink [current_node]};
         }
         else if (c == greater)
         {
-            current_node = name_pointer_t {rlink [current_node]};
+            current_node = index_t {rlink [current_node]};
         }
         else
         {
             result = current_node;
             ++count;
-            resume_node  = name_pointer_t {rlink [current_node]};
-            current_node = name_pointer_t {llink [current_node]};
+            resume_node  = index_t {rlink [current_node]};
+            current_node = index_t {llink [current_node]};
         }
 
         if (current_node == 0)
@@ -842,7 +804,7 @@ prefix_lookup (uint16_t length) -> name_pointer_t
 // section 70
 
 /// final text_link in module replacement texts
-auto module_flag  = static_cast<uint16_t> (max_texts);
+auto module_flag  = static_cast<index_t> (max_texts);
 auto last_unnamed = text_pointer_t {0};  /// most recent replacement text of unnamed module
 
 // section 71 not required
@@ -884,9 +846,9 @@ using mod_pointer_t = pascal::int_range<0, max_modules>;
 
 struct output_state
 {
-    uint16_t       end_field;   /// ending location of replacement text
-    uint16_t       byte_field;  /// present location within replacement text
-    name_pointer_t name_field;  /// byte_start index for text being output
+    index_t       end_field;   /// ending location of replacement text
+    index_t       byte_field;  /// present location within replacement text
+    index_t name_field;  /// byte_start index for text being output
     text_pointer_t repl_field;  /// tok_start index for text being output
     mod_pointer_t  mod_field;   /// module number or zero if not a module
 };
@@ -924,7 +886,6 @@ initialize_output_stacks ()
     cur_name    = 0_r;
     cur_repl    = text_pointer_t {text_link [0_r]};
 
-    // Fix: Intercept Knuth's deliberate out-of-bounds sentinel check safely
     if (cur_repl == module_flag)
     {
         zo       = 0_r;
@@ -945,7 +906,7 @@ initialize_output_stacks ()
 
 /// suspends the current level
 void
-push_level (name_pointer_t p)
+push_level (index_t p)
 {
     if (stack_ptr == stack_size)
         err.overflow ("stack");
@@ -1047,7 +1008,7 @@ get_output_impl ()
 
             // section 92
             // start scanning current macro parameter
-            push_level (name_ptr - 1_r);
+            push_level (name_ptr () - 1_r);
             continue;
         }
 
@@ -1055,7 +1016,7 @@ get_output_impl ()
 
         if (a < 024000)  // (0250 - 0200) * 0400
         {
-            auto an = name_pointer_t {a};
+            auto an = index_t {a};
 
             // section 89
 
@@ -1083,16 +1044,13 @@ get_output_impl ()
 
                 copy_parameter_to_tok_mem ();
 
-                equiv [name_ptr] = text_ptr;
-                ilk [name_ptr]   = simple;
-                auto w           = name_ptr % ww;
-                auto k           = byte_ptr [w];
+                equiv [name_ptr ()] = text_ptr;
+                ilk [name_ptr ()]   = simple;
 
-                if (name_ptr > max_names - ww)
+                if (name_ptr () > name_start.size())
                     err.overflow ("name");
 
-                byte_start [name_ptr + ww] = k;
-                ++name_ptr;
+                name_start.push_back (static_cast<index_t> (name_chars.size ()));
 
                 if (text_ptr > max_texts - zz)
                     err.overflow ("text");
@@ -1115,7 +1073,7 @@ get_output_impl ()
             // section 88
 
             a -= 024000;
-            auto an = name_pointer_t {a};
+            auto an = index_t {a};
             if (equiv [an] != 0)
             {
                 push_level (an);
@@ -1167,7 +1125,7 @@ peek_output ()
 void
 pop_parameter_stack ()
 {
-    --name_ptr;
+    name_start.pop_back ();
     --text_ptr;
     z           = text_ptr % zz;
     tok_ptr [z] = token_pointer_t {tok_start [text_ptr]};
@@ -1191,14 +1149,14 @@ app_repl (uint8_t b)
 void
 copy_parameter_to_tok_mem ()
 {
-    uint16_t balance = 1;  /// excess of ( versus ) while copying a parameter
+    int balance = 1;  /// excess of ( versus ) while copying a parameter
     ++cur_byte;
     while (true)
     {
         uint8_t b = tok_mem [zo][token_pointer_t {cur_byte++}];
         if (b == param)
         {
-            store_two_bytes (name_ptr + 077777);
+            store_two_bytes (name_ptr () + 077777);
         }
         else
         {
@@ -1314,6 +1272,16 @@ output_compressed_tables (terminal &term)
 #define DEF_16_CASES_FROM(x) DEF_8_CASES_FROM (x) DEF_8_CASES_FROM (x + 8)
 #define DEF_26_CASES_FROM(x) DEF_16_CASES_FROM (x) DEF_10_CASES_FROM (x + 16)
 
+
+#define DEF_CASE_OF(x, i) case x [i]:
+
+#define DEF_2_CASES_OF(x, i) DEF_CASE_OF (x, i) DEF_CASE_OF (x, i + 1)
+#define DEF_4_CASES_OF(x, i) DEF_2_CASES_OF (x, i) DEF_2_CASES_OF (x, i + 2)
+#define DEF_8_CASES_OF(x, i) DEF_4_CASES_OF (x, i) DEF_4_CASES_OF (x, i + 4)
+#define DEF_10_CASES_OF(x, i) DEF_8_CASES_OF (x, i) DEF_2_CASES_OF (x, i + 8)
+#define DEF_16_CASES_OF(x, i) DEF_8_CASES_OF (x, i) DEF_8_CASES_OF (x, i + 8)
+#define DEF_26_CASES_OF(x, i) DEF_16_CASES_OF (x, i) DEF_10_CASES_OF (x, i + 16)
+
 void
 send_output_identifier ();
 void
@@ -1365,7 +1333,9 @@ send_output_end_comment ()
 void
 send_output_one_char ()
 {
-    ascii_code_t cur_char = get_output();
+    constexpr auto single_char_cases = u8"!\"#$%&()*,/:;<=>?@[\\]^_`{|"sv;
+    
+    ascii_code_t cur_char = get_output ();
     switch (cur_char)
     {
     case 0    : break;
@@ -1388,32 +1358,9 @@ send_output_one_char ()
         out_proc.process_identifier ({&cur_char, 1});
         break;
 
-    case u8'!':
-    case u8'"':
-    case u8'#':
-    case u8'$':
-    case u8'%':
-    case u8'&':
-    case u8'(':
-    case u8')':
-    case u8'*':
-    case u8',':
-    case u8'/':
-    case u8':':
-    case u8';':
-    case u8'<':
-    case u8'=':
-    case u8'>':
-    case u8'?':
-    case u8'@':
-    case u8'[':
-    case u8'\\':
-    case u8']':
-    case u8'^':
-    case u8'_':
-    case u8'`':
-    case u8'{':
-    case u8'|'           : out_proc.process_single_char (cur_char); break;
+    static_assert (single_char_cases.length () == 26);
+    DEF_26_CASES_OF (single_char_cases, 0)
+        out_proc.process_single_char (cur_char); break;
     
     case u8'\''          : send_output_string (); break;
     case u8'.'           : send_output_dot (); break;
@@ -1464,22 +1411,18 @@ send_the_output ()
 void
 send_output_identifier ()
 {
-    auto   buffer     = std::array<ascii_code_t, max_id_length> {};
-    size_t k          = 0_r;
-    auto [_, bank, j] = locate_byte_mem (name_pointer_t {cur_val});
-    auto end          = byte_start [name_pointer_t {cur_val + ww}];
-    while (k < max_id_length && j < end)
+    auto   buffer = std::array<ascii_code_t, max_id_length> {};
+    size_t k      = 0;
+        
+    for (auto ch : name (static_cast <index_t> (cur_val)))
     {
-        auto ch = bank [j++];
-        if (ch >= u8'a')
-        {
-            ch -= 040;
-        }
-
         if (ch != u8'_')
         {
-            buffer [k++] = ch;
+            buffer [k++] = ch >= u8'a' ? ch - 040 : ch;
         }
+
+        if (k == buffer.size ())
+            break;
     }
 
     out_proc.process_identifier({buffer.data (), k});
@@ -2093,7 +2036,7 @@ skip_comment ()
 // section 143, 144
 
 /// name of module just scanned
-name_pointer_t cur_module;
+index_t cur_module;
 bool           scanning_hex = false;  /// are we scanning a hexadecimal constant
 
 // section 145 - 155
@@ -2409,7 +2352,7 @@ auto
 scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 {
     int            val = 0;
-    name_pointer_t q;
+    index_t q;
 
     if (is_digit (next_control))
     {
@@ -2501,7 +2444,7 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 
 /// defines numeric macros
 void
-scan_numeric (name_pointer_t p)
+scan_numeric (index_t p)
 {
     int                accumulator = 0;    /// accumulates sums
     int             next_sign   = 1;  /// sign to attach to next value
@@ -2541,8 +2484,8 @@ ensure_parantheses_balance (int &balance);
 void
 scan_repl (uint8_t type)
 {
-    int      balance = 0;  /// left parentheses minus right parentheses
-    uint16_t a;
+    int     balance = 0;  /// left parentheses minus right parentheses
+    index_t a;
 
     bool     done = false;
 
@@ -2840,7 +2783,7 @@ scan_definition_part ()
 void
 scan_pascal_part ()
 {
-    name_pointer_t p;
+    index_t p;
     switch (next_control)
     {
     case begin_pascal: p = 0_r; break;
@@ -2877,12 +2820,12 @@ scan_pascal_part ()
     }
     else
     {
-        p = name_pointer_t {equiv [p]};
-        while (text_link [p] < module_flag)  // find end of list
+        p = index_t {equiv [p]};
+        while (text_link [text_pointer_t {p}] < module_flag)  // find end of list
         {
-            p = name_pointer_t {text_link [p]};
+            p = index_t {text_link [text_pointer_t {p}]};
         }
-        text_link [p] = cur_repl_text;
+        text_link [text_pointer_t {p}] = cur_repl_text;
     }
 
     text_link [cur_repl_text] = module_flag;  // mark this replacement text as nonmacro
@@ -2904,15 +2847,18 @@ initialize ()
     open_output ();
 
     // section 42
-    std::fill (byte_start.begin (), byte_start.begin () + ww + 1, 0_r);  // one more to make name 0 of
-                                                                       // length 0
-    std::fill (byte_ptr.begin (), byte_ptr.end (), 0_r);
-    name_ptr       = 1_r;
+    name_start.clear ();
+    name_start.reserve (max_names + 1);
+    name_start.resize (2, 0_r);   // one more to make name 0 of length 0                                                                    
+
+    name_chars.clear ();
+    name_chars.reserve (max_bytes + 1); 
+
     string_ptr     = 256_r;
     pool_check_sum = 271828;
 
     // section 46
-    std::fill (tok_start.begin (), tok_start.begin () + zz + 1, 0_r);  // one more to make replacement text
+    std::fill (tok_start.begin (), tok_start.begin () + zz + 1, 0);  // one more to make replacement text
                                                                      // 0 of length 0
     std::fill (tok_ptr.begin (), tok_ptr.end (), 0_r);
     text_ptr = 1_r;

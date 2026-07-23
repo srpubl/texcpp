@@ -135,3 +135,37 @@ And now we see that we very often can just use peek_char, making the code much e
 a couple of cleanups we manage to get the switch nicely structured and really easy to comprehend.
 
 
+### Identifiers / strings
+
+The allocation of memory is somewhat awkward as the original tangle was constricted to a 16-bit architecture.
+It therefore used a couple of arrays for allocating space for strings and identifiers. We want to replace
+this with a modern approach but we want to keep the efficiency of the allocation as strings and identifiers
+always get allocated consecutively and rarely deleted (and then only the item allocated last).
+
+We start by replacing easy locate_byte_mem calls with the new function name (p), which avoids already dealing
+with the memory layout in most places. We then look at byte_start: this array holds indices into byte_mem.
+A name is identified by its index into byte_start the content of which is the first byte of the name in 
+byte_mem. The original tangle uses ww byte_mem arrays but only one byte_start array. The names get assigned
+to arrays round robin: name 0 is in byte_mem 0, name 1 in byte_mem 1, etc and name ww again in byte_mem 0.
+There is the index name_ptr that signifies the first index not in use. Also, the first ww entries in
+byte_start are 0 by definition. 
+
+We thus define a vector name_start that we statically allocate (via reserve) with the required number of 
+entries. Note the difference between capacity and size of a vector: capacity is the allocated storage place, 
+size denotes how much of that is actually used. We change name_ptr into a function: auto name_ptr ()
+{ return name_pointer_t {name_start.size () - ww};}. In this way, we don't have to keep track of name_ptr in
+addition to the vector itself. Now, most places are easy to adjust to name_start and name_ptr. Where we add
+content, we just replace the respective lines with name_start.push_back, and the one occasion of --name_ptr
+gets replaced with name_start.pop_back. Similarly we replace byte_mem with a vector and remove byte_ptr. 
+
+We can now tackle the memory limitations and their workarounds. First, we need to increase the size of an
+index to 32 bits. To avoid overflows we consequently replace all uint16_t by index_t, which we define as an
+alias to uint32_t. Then we set ww to 1 and increase max_bytes accordingly. We then flatten byte_mem into a 
+single std::array and adjust all references to it accordingly, simplifying as much as possible.
+
+We also rename name_pointer_t to index_t, and change ilk, equiv, and link into std::arrays.
+
+
+
+
+
