@@ -165,7 +165,65 @@ single std::array and adjust all references to it accordingly, simplifying as mu
 
 We also rename name_pointer_t to index_t, and change ilk, equiv, and link into std::arrays.
 
+### Name Manager
 
+We want to put all code related to the storage and lookup of a name into a class name_manager. We start by
+taking care of the id_* variables. We introduce a little function 
 
+auto
+current_id ()
+{ return std::u8string_view {&buffer[id_first], static_cast <size_t> (id_loc - id_first)}; }
 
+so that we can change all references to id_first and id_loc individually. We do for all of them except in
+get_identifier and get_preprocessed_string. Now we change current_id to a variable, whose content we 
+construct in those two functions. That is, we replace the two lines where id_loc is set by 
+
+current_id = {&buffer[id_first], static_cast <size_t> (loc - id_first)};
+
+We also need to make id_first a local variable, and then remove global id_first and id_loc. We also remove
+id_length as this is covered by current_id.length. We then replace references to current_id by a parameter
+id except in get_identifier, get_processed_string. Because we replace it in id_lookup, we have to add to
+4 other functions that are part of the input system. We have successfully removed current_id from the id
+handling system.
+
+We disentangle llink and rlink from ilk and link (we have enough memory). We then rename ilk and equiv
+to ilk_impl and equiv_impl, and introduce wrapper functions ilk and equiv to just hand out a reference. In 
+this way we just have to change ilk [t] to ilk (t), etc.
+
+We introduce a new class name_t with private members start, ilk, link, and equiv. We implement a
+private function next that just hands out the element that follows after itself. This will be
+completely safe as our name_manager will always keep one element more in the underlying vector, which it
+will never hand out to anyone. As we are using a vector it is guaranteed that the storage is contiguous.
+We can then determine the length as next.start - start and hand out a u8string_view via a function 
+content. We also add a constructor that for the moment only takes start as an argument, we leave the
+others to 0.
+
+We then create a vector names with name_t elements, and replace name_start everywhere by names. Our
+constructor makes sure that this goes smoothly. The final goal will be to use indices as little as
+possible and to rely as much as possible directly on pointers. To see what this will mean, we look at
+compute_name_location: This function manages the linked lists inside each hash bucket. So far, the
+links in the linked list are indices into names. We change that now into pointers to the objects.
+
+First we make hash and chop_hash into std::array<index_t, hash_size>. We then simplify 
+compute_name_location a first time, such that p is an index and we always use names[p] to refer to the
+respective name_t object. We can now change link and hash both to use name_t &/name_t *
+instead of index_t, and take out the lookup names[p], i.e. p is now name_ t *. This simplifies the
+function considerably but we need to keep to references to names here, both of which will be removed:
+one is the location of the newly constructed name (&*names.rbegin()), which will become a parameter,
+and p - names.data() to return the index into names.
+
+compute_name_location is called only by id_lookup. The result is fed into update_tables and returned.
+We change the return type of compute_name_location to name_t & (because it will always be a valid 
+name_t object) and compute the index inside id_lookup. Next we pass the reference to update_tables 
+instead of the index and adjust it accordingly. In there we calculate the index, so we can pass it
+on to the functions that expect it.
+
+Now we add the getter for ilk to name_t. We can now change from index_t to name_t & in 
+double_definition_error. We add also the setter as needed. We move on to change the parameter to 
+name_t & in remove_from_secondary_hash_table and calculate the index in there as we don't want to
+look at equiv, yet.
+
+So we go back to update_table and continue with add_new_name, add_new_string, update_secondary_hash
+until again we stop with equiv. Let's take care of this now. Besides adding getter and setter to 
+name_t, we also need to adapt chop_hash to using name_t *.
 

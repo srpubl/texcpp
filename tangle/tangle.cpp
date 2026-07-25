@@ -33,7 +33,7 @@ constexpr auto banner = "This is a C++ reimplementation of TANGLE, Version 4.6"s
 // section 8
 constexpr size_t buf_size = 100;  /// maximum length of input line
 constexpr size_t max_bytes
-    =  2 * 45000;  /// number of bytes in identifiers, strings, and module names; must be < 65536
+    = 2 * 45000;  /// number of bytes in identifiers, strings, and module names; must be < 65536
 constexpr size_t max_toks     = 65000;  /// number of bytes in compressed Pascal code; must be < 65536
 constexpr size_t max_names    = 4000;   /// number of identifiers, strings, module names; must be < 10240
 constexpr size_t max_texts    = 2000;   /// number of replacement texts, must be < 10240
@@ -49,7 +49,7 @@ constexpr size_t unambig_length = 7;  /// identifiers must be unique if chopped 
 constexpr size_t max_modules = 027777;  /// 0x3FFF
 
 // the maximum number of digits an int can have (in tangle)
-constexpr size_t max_digits  = 11;
+constexpr size_t max_digits = 11;
 
 // section 9
 // section 10
@@ -72,8 +72,7 @@ error_manager     err {term};
 
 void
 print (terminal &term, ascii_code_t c)
-{ term.print (convert_to_output(c)); }
-
+{ term.print (convert_to_output (c)); }
 
 // section 24
 void
@@ -196,8 +195,8 @@ auto out_buf = out_buffer {line_length, pascal_file};
 void
 print_error_location_output (terminal &term)
 {
-    term.print_ln (". (l.{})", out_buf.current_line());
-    for (auto c : out_buf.temporary_view()) { print (term, c); }
+    term.print_ln (". (l.{})", out_buf.current_line ());
+    for (auto c : out_buf.temporary_view ()) { print (term, c); }
     term.print ("... ");
 }
 
@@ -210,46 +209,91 @@ print_error_location_output (terminal &term)
 
 auto constexpr zz     = 3_r;  /// we multiply the token capacity by approximately this amount
 
-using index_t  = uint32_t;  /// used to store indices in arrays
+using index_t         = uint32_t;  /// used to store indices in arrays
 using text_pointer_t  = pascal::int_range<0, max_texts>;
 using byte_pointer_t  = pascal::int_range<0, max_bytes>;
 using token_pointer_t = pascal::int_range<0, max_toks>;
 using token_bank_t    = pascal::int_range<0, zz - 1_r>;
 
 auto name_chars       = std::vector<ascii_code_t> {};  /// characters of names
-auto name_start       = std::vector<index_t> {};      /// directory into name_chars
 auto tok_mem = pascal::array<token_bank_t, pascal::array<token_pointer_t, ascii_code_t>> {};  /// tokens
+auto tok_start = pascal::array<text_pointer_t, index_t> {};  /// directory into tok mem
+auto link      = std::array<index_t, max_names> {};          /// hash table
 
+enum ilk_value
+{
+    normal,     /// ordinary identifiers
+    numeric,    /// numeric macros and strings
+    simple,     /// simple macros
+    parametric  /// parametric macros
+};
 
-auto tok_start  = pascal::array<text_pointer_t, index_t> {};  /// directory into tok mem
-auto link       = std::array<index_t, max_names> {};  /// hash table or tree links
-auto ilk        = std::array<index_t, max_names> {};  /// type codes or tree links
-auto equiv      = std::array<index_t, max_names> {};  /// info corresponding to names
-auto text_link  = pascal::array<text_pointer_t, index_t> {};  /// relates replacement texts
+class name_t
+{
+    index_t _start;
+    name_t *_link = nullptr;
+
+    index_t  _equiv = 0;
+    ilk_value _ilk   = normal;
+
+    // Safe, as we never hand out the last element to callers
+    constexpr auto &
+    next () const
+    { return *(this + 1); }
+
+    friend auto &
+    ilk (auto i);
+
+    friend auto &
+    equiv (auto i);
+
+  public:
+    name_t (index_t start) : _start (start) {}
+    auto constexpr length () const { return next ()._start - _start; }
+    auto constexpr content () const -> std::u8string_view { return {&name_chars [_start], length ()}; }
+    auto constexpr link () const { return _link; }
+    auto constexpr set_link (auto value) { this->_link = value; }
+    auto constexpr ilk () const { return _ilk; }
+    auto constexpr set_ilk (auto value) { this->_ilk = value; }
+    auto constexpr equiv () const { return _equiv; }
+    auto constexpr set_equiv (auto value) { this->_equiv = value; }
+};
+
+auto names = std::vector<name_t> {};
+
+auto &
+ilk (auto i)
+{ return names [i]._ilk; }
+
+auto &
+equiv (auto i)
+{ return names [i]._equiv; }
+
+auto text_link = pascal::array<text_pointer_t, index_t> {};  /// relates replacement texts
 
 // section 39
 
 /// length of a name
 auto
 length (index_t index)
-{ return name_start [index + 1] - name_start [index]; }
+{ return names [index].length (); }
 
-auto 
+auto
 name (index_t p)
-{
-    return std::u8string_view {&name_chars [name_start[p]], length (p)};
-}
-
-// name_pointer is name_index_t and we needed to define it alreay in section 38
+{ return names [p].content (); }
 
 // section 40
 
 auto
-name_ptr ()
-{ return static_cast <index_t> (name_start.size () - 1);}
+is_next_new_name (name_t &name)
+{ return &name == &*names.rbegin (); }
 
-auto string_ptr = index_t {256};  /// next number to be given to a string of length > 1
-auto pool_check_sum = 271828;  /// sort of a hash for the whole string pool
+auto
+name_ptr ()
+{ return static_cast<index_t> (names.size () - 1); }
+
+auto string_ptr     = index_t {256};  /// next number to be given to a string of length > 1
+auto pool_check_sum = 271828;         /// sort of a hash for the whole string pool
 
 // section 41, 42, 43 not required (global arrays are zero-initialized in C++),
 // other initializers already given in section 40
@@ -265,18 +309,10 @@ auto z        = token_bank_t {1};                                 /// current se
 
 // section 47
 
-enum ilk_value
-{
-    normal,     /// ordinary identifiers
-    numeric,    /// numeric macros and strings
-    simple,     /// simple macros
-    parametric  /// parametric macros
-};
-
 // section 48
 /// left link in binary search tree for module names
-auto &llink = link;
-auto &rlink = ilk;  /// right link in binary search tree for module names
+auto llink = std::array<index_t, max_names> {};
+auto rlink = std::array<index_t, max_names> {};  /// right link in binary search tree for module names
 
 // section 49
 
@@ -289,10 +325,7 @@ print_id (terminal term, index_t p)
     }
     else
     {
-        for (auto ch : name (p))
-        {
-            print (term, ch);
-        }
+        for (auto ch : name (p)) { print (term, ch); }
     }
 }
 
@@ -300,116 +333,108 @@ print_id (terminal term, index_t p)
 using hash_index_t    = pascal::int_range<0, hash_size>;
 using chopped_index_t = pascal::int_range<0, unambig_length>;
 
-auto id_first         = buf_index_t {};
-auto id_loc           = buf_index_t {};
 auto double_chars     = buf_index_t {};
-auto hash             = pascal::array<hash_index_t, index_t> {};
-auto chop_hash        = pascal::array<hash_index_t, index_t> {};
+auto hash             = std::array<name_t *, hash_size> {};
+auto chop_hash        = std::array<index_t, hash_size> {};
 auto chopped_id       = pascal::array<chopped_index_t, ascii_code_t> {};
 
-/// convenience function because this value is used very often
-auto
-id_length ()
-{ return buf_index_t {id_loc - id_first}; }
+auto current_id       = std::u8string_view {};
 
 // section 51, 52 not required
 
 // section 53
 
 auto
-compute_hash_code () -> hash_index_t;
+compute_hash_code (std::u8string_view id) -> hash_index_t;
 auto
-compute_name_location (hash_index_t h) -> index_t;
+compute_name_location (index_t h, std::u8string_view id) -> name_t &;
 void
-update_tables (index_t p, ilk_value t);
+update_tables (name_t &p, ilk_value t, std::u8string_view id);
 
 /// Finds current identifier if it exists or stores it.
 auto
-id_lookup (ilk_value t) -> index_t
+id_lookup (ilk_value t, std::u8string_view id)
 {
-    hash_index_t   h = compute_hash_code ();
-    index_t p = compute_name_location (h);
+    auto  h       = compute_hash_code (id);
+    auto &p       = compute_name_location (h, id);
 
-    if (p == name_ptr () || t != normal)
+    if (is_next_new_name (p) || t != normal)
     {
-        update_tables (p, t);
+        update_tables (p, t, id);
     }
 
-    return p;
+    return static_cast<index_t> (&p - names.data ());
 }
 
 // section 54
 
-/// computes the hash of the current id
+/// computes the hash of the id
 auto
-compute_hash_code () -> hash_index_t
+compute_hash_code (std::u8string_view id) -> hash_index_t
 {
-    auto h = hash_index_t {static_cast<uint8_t> (buffer [id_first])};
-    for (auto i = buf_index_t {id_first + 1}; i < id_loc; ++i)
-    {
-        h = hash_index_t {(h + h + buffer [i]) % hash_size};
-    };
+    auto h = hash_index_t {static_cast<uint8_t> (id [0])};
+    id.remove_prefix (1);
+    for (auto c : id) { h = hash_index_t {(h + h + c) % hash_size}; };
     return h;
 }
 
 // section 55
 
-/// Finds the index of the current id (in buffer) into byte_start.
+/// Finds the index of the id into names.
 ///
 /// The hash list is implemented by storing the start of each bucket in hash
 /// and the linked list for each bucket implicitly in link[p] (there must be
 /// at most one successor for each p)
 auto
-compute_name_location (hash_index_t h) -> index_t
+compute_name_location (index_t h, std::u8string_view id) -> name_t &
 {
-    auto p   = index_t {hash [h]};
-    auto id  = std::u8string_view {&buffer [id_first], id_length ()};
+    auto p = hash [h];
 
-    while (p != 0)
+    while (p)
     {
-        if (name (p) == id)
-            return p;
+        if (p->content () == id)
+            return *p;
 
-        p = index_t {link [p]};
+        p = p->link ();
     }
-    p = name_ptr ();
+    p = &*names.rbegin ();  // the address of the next new name
 
     // insert p at beginning of hash list
-    link [p] = hash [h];
+    p->set_link (hash [h]);
     hash [h] = p;
 
-    return p;
+    return *p;
 }
 
 // section 56
 // section 57
 
 auto
-compute_secondary_hash () -> hash_index_t;
+compute_secondary_hash (std::u8string_view id) -> hash_index_t;
 void
-double_definition_error (index_t p, ilk_value t, hash_index_t h);
+double_definition_error (name_t &p, ilk_value t, hash_index_t h);
 void
-add_new_name (index_t p, ilk_value t, hash_index_t h);
+add_new_name (name_t &p, ilk_value t, hash_index_t h, std::u8string_view id);
 
 /// Update the tables and check for possible errors
 void
-update_tables (index_t p, ilk_value t)
+update_tables (name_t &p, ilk_value t, std::u8string_view id)
 {
-    hash_index_t h = 0_r;
+    hash_index_t h       = 0_r;
 
-    if ((p != name_ptr () && t != normal && ilk [p] == normal)
-        || (p == name_ptr () && t == normal && buffer [id_first] != u8'"'))
+    if ((!is_next_new_name (p) && t != normal && p.ilk () == normal)
+        || (is_next_new_name (p) && t == normal && id [0] != u8'"'))
     {
-        h = compute_secondary_hash ();
+        h = compute_secondary_hash (id);
     }
 
-    if (p != name_ptr ())
+    if (!is_next_new_name (p))
     {
         double_definition_error (p, t, h);
     }
     else
     {
-        add_new_name (p, t, h);
+        add_new_name (p, t, h, id);
     }
 }
 
@@ -417,16 +442,14 @@ update_tables (index_t p, ilk_value t)
 
 /// Computes secondary hash and sets chopped_id to the chopped id
 auto
-compute_secondary_hash () -> hash_index_t
+compute_secondary_hash (std::u8string_view id) -> hash_index_t
 {
     chopped_index_t s = 0_r;
     hash_index_t    h = 0_r;
-    for (auto i = id_first; i < id_loc; ++i)
+    for (auto ch : id)
     {
         if (s == unambig_length)
             break;
-
-        auto ch = buffer [i];
 
         if (ch == u8'_')
             continue;
@@ -448,12 +471,12 @@ compute_secondary_hash () -> hash_index_t
 // section 59
 
 void
-remove_from_secondary_hash_table (index_t p, hash_index_t h);
+remove_from_secondary_hash_table (name_t &p, hash_index_t h);
 
 void
-double_definition_error (index_t p, ilk_value t, hash_index_t h)
+double_definition_error (name_t &p, ilk_value t, hash_index_t h)
 {
-    if (ilk [p] == normal)  // We have seen p before it was used
+    if (p.ilk () == normal)  // We have seen p before it was used
     {
         if (t == numeric)  // We don't allow numeric macros to be defined after their first use
         {
@@ -473,59 +496,61 @@ double_definition_error (index_t p, ilk_value t, hash_index_t h)
     }
 
     // the second definition wins: we force a new ilk on p
-    ilk [p] = t;
+    p.set_ilk (t);
 }
 
 // section 60
 
 void
-remove_from_secondary_hash_table (index_t p, hash_index_t h)
+remove_from_secondary_hash_table (name_t &pp, hash_index_t h)
 {
+    auto p = &pp - &*names.data ();
     auto q = index_t {chop_hash [h]};
     if (q == p)
     {
-        chop_hash [h] = equiv [p];
+        chop_hash [h] = equiv (p);
     }
     else
     {
-        while (equiv [q] != p) { q = index_t {equiv [q]}; }
-        equiv [q] = equiv [p];
+        while (equiv (q) != p) { q = index_t {equiv (q)}; }
+        equiv (q) = equiv (p);
     }
 }
 
 // section 61
 
 void
-update_secondary_hash (index_t p, hash_index_t h);
+update_secondary_hash (name_t &p, hash_index_t h);
 void
-add_new_string (index_t p);
+add_new_string (name_t &p, std::u8string_view id);
 
 void
-add_new_name (index_t p, ilk_value t, hash_index_t h)
+add_new_name (name_t &p, ilk_value type, hash_index_t h, std::u8string_view id)
 {
-    auto first_char = buffer [id_first];
+    auto first_char = id [0];
 
-    if (t == normal && first_char != u8'"')
+    if (type == normal && first_char != u8'"')
     {
         update_secondary_hash (p, h);
     }
 
-    if (name_chars.size () + id_length () > max_bytes)
+    if (name_chars.size () + id.length () > name_chars.capacity ())
         err.overflow ("byte memory");
 
-    if (name_ptr () > name_start.size ())
+    if (name_ptr () > names.capacity () - 1)
         err.overflow ("name");
 
-    name_chars.insert (name_chars.end (), &buffer [id_first], &buffer [id_loc]);
-    name_start.push_back (static_cast<index_t> (name_chars.size ()));
+    name_chars.insert (name_chars.end (), id.begin (), id.end ());
+    names.push_back ({static_cast<index_t> (name_chars.size ())});
 
-    if (first_char != u8'"')
+    if (first_char == u8'"')
     {
-        ilk [p] = t;
+        p.set_ilk (numeric);
+        add_new_string (p, id);
     }
     else
     {
-        add_new_string (p);
+        p.set_ilk (type);
     }
 }
 
@@ -534,17 +559,18 @@ void
 check_conflicting_names (index_t q);
 
 void
-update_secondary_hash (index_t p, hash_index_t h)
+update_secondary_hash (name_t &pp, hash_index_t h)
 {
-    auto q = index_t {chop_hash [h]};
+    auto p = static_cast<index_t> (&pp - &*names.data ());
+    auto q = chop_hash [h];
     while (q != 0)
     {
         check_conflicting_names (q);
-        q = index_t {equiv [q]};
+        q = index_t {equiv (q)};
     }
 
     // put p at front of secondary hash list
-    equiv [p]     = chop_hash [h];
+    equiv (p)     = chop_hash [h];
     chop_hash [h] = p;
 }
 
@@ -559,7 +585,7 @@ check_conflicting_names (index_t q)
     size_t          i  = 0;
 
     for (auto ch : id)
-    { 
+    {
         ++i;
         if (s == unambig_length)
             break;
@@ -596,18 +622,18 @@ add_to_checksum (int value)
 }
 
 void
-add_new_string (index_t p)
+add_new_string (name_t &pp, std::u8string_view id)
 {
-    ilk [p]     = numeric;
-    auto length = id_length ();
+    auto p      = &pp - &*names.data ();
+    auto length = static_cast<uint8_t> (id.length ());
 
     if (length - double_chars == 2)  // single-character string
     {
-        equiv [p] = buffer [id_first + 1_r] + 0100000;
+        equiv (p) = id [1] + 0100000;
     }
     else
     {
-        equiv [p] = string_ptr + 0100000;
+        equiv (p) = string_ptr + 0100000;
         length -= (double_chars + 1_r);
         if (length > 99)
         {
@@ -621,19 +647,19 @@ add_new_string (index_t p)
 
         add_to_checksum (length);
 
-        auto i = buf_index_t {id_first + 1};
-        while (i < id_loc)
+        bool skip_one = true;  // skip first element and every doubled " or @
+        for (auto ch : id)
         {
-            auto ch = buffer [i];
+            if (skip_one)
+            {
+                skip_one = false;
+                continue;
+            }
             write (pool, ch);
             add_to_checksum (ch);
             if (ch == u8'"' || ch == u8'@')
             {
-                i += 2_r;  // omit second appearance of doubled character
-            }
-            else
-            {
-                ++i;
+                skip_one = true;
             }
         }
         pool.write_line ();
@@ -699,10 +725,10 @@ module_lookup (index_t length) -> index_t
 auto
 add_module_name (index_t length, comparison_result &c, index_t q) -> index_t
 {
-    if (name_chars.size() + length > max_bytes)
+    if (name_chars.size () + length > name_chars.capacity ())
         err.overflow ("byte memory");
 
-    if (name_ptr () > name_start.size ())
+    if (name_ptr () > names.capacity () - 1)
         err.overflow ("name");
 
     auto p = name_ptr ();
@@ -719,10 +745,10 @@ add_module_name (index_t length, comparison_result &c, index_t q) -> index_t
     rlink [p] = 0;
 
     c         = equal;
-    equiv [p] = 0;
+    equiv (p) = 0;
 
     name_chars.insert (name_chars.end (), &mod_text [1_r], &mod_text [byte_pointer_t {length + 1}]);
-    name_start.push_back (static_cast<index_t> (name_chars.size ()));
+    names.push_back (static_cast<index_t> (name_chars.size ()));
 
     return p;
 }
@@ -732,11 +758,11 @@ add_module_name (index_t length, comparison_result &c, index_t q) -> index_t
 auto
 compare_module_names (index_t length, index_t p) -> comparison_result
 {
-    auto              old_name  = name (p);
-    auto              new_name = std::u8string_view {&mod_text [1_r], length};
+    auto   old_name = name (p);
+    auto   new_name = std::u8string_view {&mod_text [1_r], length};
 
-    size_t i   = 0;
-    size_t len = std::min (old_name.length (), new_name.length ());
+    size_t i        = 0;
+    size_t len      = std::min (old_name.length (), new_name.length ());
 
     for (; i < len; ++i)
     {
@@ -745,9 +771,7 @@ compare_module_names (index_t length, index_t p) -> comparison_result
             return result == std::strong_ordering::less ? less : greater;
     }
 
-    return i != old_name.length() ? prefix :
-           i != new_name.length() ? extension : 
-           equal;
+    return i != old_name.length () ? prefix : i != new_name.length () ? extension : equal;
 }
 
 // section 69
@@ -846,9 +870,9 @@ using mod_pointer_t = pascal::int_range<0, max_modules>;
 
 struct output_state
 {
-    index_t       end_field;   /// ending location of replacement text
-    index_t       byte_field;  /// present location within replacement text
-    index_t name_field;  /// byte_start index for text being output
+    index_t        end_field;   /// ending location of replacement text
+    index_t        byte_field;  /// present location within replacement text
+    index_t        name_field;  /// byte_start index for text being output
     text_pointer_t repl_field;  /// tok_start index for text being output
     mod_pointer_t  mod_field;   /// module number or zero if not a module
 };
@@ -913,7 +937,7 @@ push_level (index_t p)
 
     stack [stack_ptr++] = cur_state;
     cur_name            = p;
-    cur_repl            = text_pointer_t {equiv [p]};
+    cur_repl            = text_pointer_t {equiv (p)};
     zo                  = cur_repl % zz;
     cur_byte            = tok_start [cur_repl];
     cur_end             = tok_start [cur_repl + zz];
@@ -946,7 +970,7 @@ pop_level ()
     auto repl = text_pointer_t {text_link [cur_repl]};
     if (repl == 0)  // end of macro expansion
     {
-        if (ilk [cur_name] == parametric)
+        if (ilk (cur_name) == parametric)
         {
             pop_parameter_stack ();
         }
@@ -1008,7 +1032,7 @@ get_output_impl ()
 
             // section 92
             // start scanning current macro parameter
-            push_level (name_ptr () - 1_r);
+            push_level (name_ptr () - 1);
             continue;
         }
 
@@ -1020,11 +1044,11 @@ get_output_impl ()
 
             // section 89
 
-            switch (ilk [an])
+            switch (ilk (an))
             {
             case normal : cur_val = an; return identifier;
 
-            case numeric: cur_val = equiv [an] - 0100000; return number;
+            case numeric: cur_val = equiv (an) - 0100000; return number;
 
             case simple : push_level (an); continue;
 
@@ -1044,13 +1068,13 @@ get_output_impl ()
 
                 copy_parameter_to_tok_mem ();
 
-                equiv [name_ptr ()] = text_ptr;
-                ilk [name_ptr ()]   = simple;
+                equiv (name_ptr ()) = text_ptr;
+                ilk (name_ptr ())   = simple;
 
-                if (name_ptr () > name_start.size())
+                if (name_ptr () > names.capacity () - 1)
                     err.overflow ("name");
 
-                name_start.push_back (static_cast<index_t> (name_chars.size ()));
+                names.push_back (static_cast<index_t> (name_chars.size ()));
 
                 if (text_ptr > max_texts - zz)
                     err.overflow ("text");
@@ -1074,7 +1098,7 @@ get_output_impl ()
 
             a -= 024000;
             auto an = index_t {a};
-            if (equiv [an] != 0)
+            if (equiv (an) != 0)
             {
                 push_level (an);
             }
@@ -1099,9 +1123,9 @@ int last_char;
 
 ascii_code_t
 get_output ()
-{ 
+{
     if (last_char < 0)
-        return static_cast<ascii_code_t> (get_output_impl () & 0xFF); 
+        return static_cast<ascii_code_t> (get_output_impl () & 0xFF);
 
     ascii_code_t res = static_cast<ascii_code_t> (last_char & 0xFF);
     last_char        = -1;
@@ -1125,7 +1149,7 @@ peek_output ()
 void
 pop_parameter_stack ()
 {
-    name_start.pop_back ();
+    names.pop_back ();
     --text_ptr;
     z           = text_ptr % zz;
     tok_ptr [z] = token_pointer_t {tok_start [text_ptr]};
@@ -1272,7 +1296,6 @@ output_compressed_tables (terminal &term)
 #define DEF_16_CASES_FROM(x) DEF_8_CASES_FROM (x) DEF_8_CASES_FROM (x + 8)
 #define DEF_26_CASES_FROM(x) DEF_16_CASES_FROM (x) DEF_10_CASES_FROM (x + 16)
 
-
 #define DEF_CASE_OF(x, i) case x [i]:
 
 #define DEF_2_CASES_OF(x, i) DEF_CASE_OF (x, i) DEF_CASE_OF (x, i + 1)
@@ -1334,34 +1357,36 @@ void
 send_output_one_char ()
 {
     constexpr auto single_char_cases = u8"!\"#$%&()*,/:;<=>?@[\\]^_`{|"sv;
-    
-    ascii_code_t cur_char = get_output ();
+
+    ascii_code_t   cur_char          = get_output ();
     switch (cur_char)
     {
-    case 0    : break;
+    case 0:
+        break;
 
-    DEF_10_CASES_FROM ('0')
+        DEF_10_CASES_FROM ('0')
         send_out_number (cur_char, 10, 0xCCCCCCC, is_digit);
         switch (peek_output ())
-        { 
+        {
         case u8'e':
         case u8'E': finish_real_constant (false);
         }
         break;
 
-    DEF_26_CASES_FROM (u8'A')
+        DEF_26_CASES_FROM (u8'A')
         out_proc.process_identifier ({&cur_char, 1});
         break;
 
-    DEF_26_CASES_FROM (u8'a')
+        DEF_26_CASES_FROM (u8'a')
         cur_char -= 040;
         out_proc.process_identifier ({&cur_char, 1});
         break;
 
-    static_assert (single_char_cases.length () == 26);
-    DEF_26_CASES_OF (single_char_cases, 0)
-        out_proc.process_single_char (cur_char); break;
-    
+        static_assert (single_char_cases.length () == 26);
+        DEF_26_CASES_OF (single_char_cases, 0)
+        out_proc.process_single_char (cur_char);
+        break;
+
     case u8'\''          : send_output_string (); break;
     case u8'.'           : send_output_dot (); break;
     case u8'+'           : out_proc.process_sign (+1); break;
@@ -1388,13 +1413,11 @@ send_output_one_char ()
     case force_line      : out_proc.force_line_break (); break;
 
     case join:
-        out_proc.process_fraction({});
+        out_proc.process_fraction ({});
         out_proc.ensure_no_line_break ();
         break;
 
-    default        : 
-        err.err_print ("! Can't output ASCII code {}", static_cast<uint8_t> (cur_char));
-        break;
+    default: err.err_print ("! Can't output ASCII code {}", static_cast<uint8_t> (cur_char)); break;
     }
 }
 
@@ -1413,8 +1436,8 @@ send_output_identifier ()
 {
     auto   buffer = std::array<ascii_code_t, max_id_length> {};
     size_t k      = 0;
-        
-    for (auto ch : name (static_cast <index_t> (cur_val)))
+
+    for (auto ch : name (static_cast<index_t> (cur_val)))
     {
         if (ch != u8'_')
         {
@@ -1425,7 +1448,7 @@ send_output_identifier ()
             break;
     }
 
-    out_proc.process_identifier({buffer.data (), k});
+    out_proc.process_identifier ({buffer.data (), k});
 }
 
 // Section 117
@@ -1433,9 +1456,9 @@ send_output_identifier ()
 void
 send_output_string ()
 {
-    auto   buffer     = std::array<ascii_code_t, line_length> {};
-    size_t     k      = 0;
-    buffer [0]        = u8'\'';
+    auto   buffer = std::array<ascii_code_t, line_length> {};
+    size_t k      = 0;
+    buffer [0]    = u8'\'';
     ascii_code_t ch;
     do
     {
@@ -1463,8 +1486,8 @@ send_output_string ()
 void
 send_output_verbatim_string ()
 {
-    auto buffer = std::array<ascii_code_t, line_length> {};
-    size_t k    = 0;
+    auto         buffer = std::array<ascii_code_t, line_length> {};
+    size_t       k      = 0;
     ascii_code_t ch;
     do
     {
@@ -1511,10 +1534,10 @@ send_out_number (ascii_code_t cur_char, int base, int limit, bool (*is_valid) (a
 
 void
 finish_real_constant (bool start_with_dot)
-{  
+{
     ascii_code_t cur_char = get_output ();
-    auto   buffer = std::array<ascii_code_t, line_length> {};
-    size_t k      = 0;
+    auto         buffer   = std::array<ascii_code_t, line_length> {};
+    size_t       k        = 0;
     if (start_with_dot)
     {
         buffer [k++] = u8'.';
@@ -1527,9 +1550,9 @@ finish_real_constant (bool start_with_dot)
             ++k;
         }
 
-        auto last_char  = cur_char;
-        buffer [k - 1]  = cur_char;
-        cur_char        = get_output ();
+        auto last_char = cur_char;
+        buffer [k - 1] = cur_char;
+        cur_char       = get_output ();
 
         if (last_char == u8'E' && (cur_char == u8'+' || cur_char == u8'-'))
         {
@@ -1538,7 +1561,7 @@ finish_real_constant (bool start_with_dot)
                 ++k;
             }
             buffer [k - 1] = cur_char;
-            cur_char        = get_output ();
+            cur_char       = get_output ();
         }
         else if (cur_char == u8'e')
         {
@@ -1552,7 +1575,7 @@ finish_real_constant (bool start_with_dot)
         err.err_print ("! Fraction too long");
     }
 
-    out_proc.process_fraction({buffer.data (), k});
+    out_proc.process_fraction ({buffer.data (), k});
     put_back_output (cur_char);
 }
 
@@ -1560,10 +1583,10 @@ finish_real_constant (bool start_with_dot)
 void
 send_output_module_number ()
 {
-    constexpr size_t buf_size = max_digits + 3; // digits + 2 braces + 1 colon
-    auto             buffer     = std::array<char8_t, buf_size> {};
-    auto            *write_ptr  = buffer.data ();
-    *write_ptr++                = (brace_level == 0 ? u8'{' : u8'[');
+    constexpr size_t buf_size  = max_digits + 3;  // digits + 2 braces + 1 colon
+    auto             buffer    = std::array<char8_t, buf_size> {};
+    auto            *write_ptr = buffer.data ();
+    *write_ptr++               = (brace_level == 0 ? u8'{' : u8'[');
     if (cur_val < 0)
     {
         *write_ptr++ = u8':';
@@ -1571,11 +1594,11 @@ send_output_module_number ()
     }
 
     ascii_code_t digit_buffer [max_digits];
-    auto end   = std::end(digit_buffer);
-    auto begin = to_chars (end, cur_val);
-    write_ptr = std::copy (begin, end, write_ptr); 
-        
-    if (buffer[1] != u8':')
+    auto         end   = std::end (digit_buffer);
+    auto         begin = to_chars (end, cur_val);
+    write_ptr          = std::copy (begin, end, write_ptr);
+
+    if (buffer [1] != u8':')
     {
         *write_ptr++ = u8':';
     }
@@ -2037,7 +2060,7 @@ skip_comment ()
 
 /// name of module just scanned
 index_t cur_module;
-bool           scanning_hex = false;  /// are we scanning a hexadecimal constant
+bool    scanning_hex = false;  /// are we scanning a hexadecimal constant
 
 // section 145 - 155
 ascii_code_t
@@ -2175,7 +2198,7 @@ get_identifier (ascii_code_t c)
     {
         ascii_code_t d;
         --loc;
-        id_first = loc;
+        auto id_first = loc;
         do
         {
             ++loc;
@@ -2185,8 +2208,8 @@ get_identifier (ascii_code_t c)
 
         if (loc > id_first + 1)
         {
-            c      = identifier;
-            id_loc = loc;
+            c          = identifier;
+            current_id = {&buffer [id_first], static_cast<size_t> (loc - id_first)};
         }
     }
     else
@@ -2201,8 +2224,8 @@ ascii_code_t
 get_preprocessed_string ()
 {
     ascii_code_t d;
-    double_chars = 0_r;
-    id_first     = loc - 1_r;
+    double_chars  = 0_r;
+    auto id_first = loc - 1_r;
 
     do
     {
@@ -2228,7 +2251,7 @@ get_preprocessed_string ()
     }
     while (d != u8'"');
 
-    id_loc = loc - 1_r;
+    current_id = {&buffer [id_first], static_cast<size_t> (loc - 1 - id_first)};
     return identifier;
 }
 
@@ -2315,10 +2338,7 @@ put_module_name_in_mod_text () -> inname_index_t
     if (k > longest_name - 2)
     {
         err.terminal ().print_nl ("! Section name too long: ");
-        for (auto j = inname_index_t {1}; j <= 25; ++j)
-        {
-            print (err.terminal (), mod_text [j]);
-        }
+        for (auto j = inname_index_t {1}; j <= 25; ++j) { print (err.terminal (), mod_text [j]); }
         err.terminal ().print ("...");
         err.mark_harmless ();
     }
@@ -2351,7 +2371,7 @@ enum class scan_numeric_cases
 auto
 scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 {
-    int            val = 0;
+    int     val = 0;
     index_t q;
 
     if (is_digit (next_control))
@@ -2401,14 +2421,14 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
         return scan_numeric_cases::reswitch;
 
     case identifier:
-        q = id_lookup (normal);
-        if (ilk [q] != numeric)
+        q = id_lookup (normal, current_id);
+        if (ilk (q) != numeric)
         {
             next_control = u8'*';  // leads to error
             return scan_numeric_cases::reswitch;
         }
 
-        accumulator += next_sign * (equiv [q] - 0100000);
+        accumulator += next_sign * (equiv (q) - 0100000);
         next_sign = 1_r;
         return scan_numeric_cases::consumed;
 
@@ -2446,8 +2466,8 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 void
 scan_numeric (index_t p)
 {
-    int                accumulator = 0;    /// accumulates sums
-    int             next_sign   = 1;  /// sign to attach to next value
+    int                accumulator = 0;  /// accumulates sums
+    int                next_sign   = 1;  /// sign to attach to next value
 
     scan_numeric_cases state;
     do
@@ -2463,7 +2483,7 @@ scan_numeric (index_t p)
         err.err_print ("! Value too big: ", accumulator);
         accumulator = 0;
     }
-    equiv [p] = accumulator + 0100000;  // name p now is defined to equal accumulator
+    equiv (p) = accumulator + 0100000;  // name p now is defined to equal accumulator
 }
 
 // section 163 nothing tbd
@@ -2487,7 +2507,7 @@ scan_repl (uint8_t type)
     int     balance = 0;  /// left parentheses minus right parentheses
     index_t a;
 
-    bool     done = false;
+    bool    done = false;
 
     do
     {
@@ -2518,7 +2538,7 @@ scan_repl (uint8_t type)
             break;
 
         case identifier:
-            a = id_lookup (normal);
+            a = id_lookup (normal, current_id);
             app_repl (0200 + (a >> 8));
             a &= 0xFF;
             break;
@@ -2689,9 +2709,9 @@ copy_verbatim_from_buffer_to_tok_mem ()
 void
 define_macro (ilk_value type)
 {
-    auto p = id_lookup (type);
+    auto p = id_lookup (type, current_id);
     scan_repl (type);
-    equiv [p]                 = cur_repl_text;
+    equiv (p)                 = cur_repl_text;
     text_link [cur_repl_text] = 0;
 }
 
@@ -2743,7 +2763,7 @@ scan_definition_part ()
 
         if (next_control == u8'=')
         {
-            scan_numeric (id_lookup (numeric));
+            scan_numeric (id_lookup (numeric, current_id));
             continue;
         }
 
@@ -2814,13 +2834,13 @@ scan_pascal_part ()
         text_link [last_unnamed] = cur_repl_text;
         last_unnamed             = cur_repl_text;
     }
-    else if (equiv [p] == 0)  // first module of this name
+    else if (equiv (p) == 0)  // first module of this name
     {
-        equiv [p] = cur_repl_text;
+        equiv (p) = cur_repl_text;
     }
     else
     {
-        p = index_t {equiv [p]};
+        p = index_t {equiv (p)};
         while (text_link [text_pointer_t {p}] < module_flag)  // find end of list
         {
             p = index_t {text_link [text_pointer_t {p}]};
@@ -2847,12 +2867,12 @@ initialize ()
     open_output ();
 
     // section 42
-    name_start.clear ();
-    name_start.reserve (max_names + 1);
-    name_start.resize (2, 0_r);   // one more to make name 0 of length 0                                                                    
+    names.clear ();
+    names.reserve (max_names + 1);
+    names.resize (2, 0);  // one more to make name 0 of length 0
 
     name_chars.clear ();
-    name_chars.reserve (max_bytes + 1); 
+    name_chars.reserve (max_bytes + 1);
 
     string_ptr     = 256_r;
     pool_check_sum = 271828;
@@ -2866,11 +2886,11 @@ initialize ()
 
     // section 48
     rlink [0_r] = 0;
-    equiv [0_r] = 0;
+    equiv (0_r) = 0;
 
     // section 52
-    std::fill (hash.begin (), hash.end (), 0_r);
-    std::fill (chop_hash.begin (), chop_hash.end (), 0_r);
+    std::fill (hash.begin (), hash.end (), nullptr);
+    std::fill (chop_hash.begin (), chop_hash.end (), 0);
 
     // section 71
     last_unnamed    = 0_r;
@@ -2924,11 +2944,8 @@ tangle (
         pool.write ('*');
 
         char digit_buffer [max_digits];
-        std::to_chars (digit_buffer, std::end(digit_buffer), pool_check_sum);
-        for (size_t i = 0; i < 9; ++i)
-        {
-            write (pool, digit_buffer [i]);
-        }
+        std::to_chars (digit_buffer, std::end (digit_buffer), pool_check_sum);
+        for (size_t i = 0; i < 9; ++i) { write (pool, digit_buffer [i]); }
         pool.write_line ();
     }
 
