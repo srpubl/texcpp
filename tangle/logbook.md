@@ -227,3 +227,12 @@ So we go back to update_table and continue with add_new_name, add_new_string, up
 until again we stop with equiv. Let's take care of this now. Besides adding getter and setter to 
 name_t, we also need to adapt chop_hash to using name_t *.
 
+Now we take care of equiv. It has 3 distinct use cases: as the index for the next element in the 
+linked list in the same bucket of the chopped hashtable (i.e. the hashtable based on the hash of the 
+chopped id (id with all capitals and no underscores)), as the index of the replacement text, and as
+a general number.
+
+We thus create a union equiv_u with exactly these three use cases and change the member _equiv in 
+name_t to this type. We then change our function equiv to refer to the chop_link member. We then
+add three getters and setters to name_t, one for each use case. Step by step, we change the calls to
+equiv(p) to something like names[p].number() taking care of the respective use case.

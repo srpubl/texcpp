@@ -228,12 +228,19 @@ enum ilk_value
     parametric  /// parametric macros
 };
 
+union equiv_u
+{
+    index_t chop_link;
+    text_pointer_t repl_text;
+    int32_t number;
+};
+
 class name_t
 {
     index_t _start;
     name_t *_link = nullptr;
 
-    index_t  _equiv = 0;
+    equiv_u _equiv = {};
     ilk_value _ilk   = normal;
 
     // Safe, as we never hand out the last element to callers
@@ -257,6 +264,12 @@ class name_t
     auto constexpr set_ilk (auto value) { this->_ilk = value; }
     auto constexpr equiv () const { return _equiv; }
     auto constexpr set_equiv (auto value) { this->_equiv = value; }
+    auto constexpr chop_link () const { return _equiv.chop_link; }
+    auto constexpr set_chop_link (auto value) { this->_equiv.chop_link = value; }
+    auto constexpr number () const { return _equiv.number - 0100000; }
+    auto constexpr set_number (auto value) { this->_equiv.number = value + 0100000; }
+    auto constexpr replacement_text () const { return _equiv.repl_text; }
+    auto constexpr set_replacement_text (auto value) { this->_equiv.repl_text = value; }
 };
 
 auto names = std::vector<name_t> {};
@@ -267,7 +280,7 @@ ilk (auto i)
 
 auto &
 equiv (auto i)
-{ return names [i]._equiv; }
+{ return names [i]._equiv.chop_link; }
 
 auto text_link = pascal::array<text_pointer_t, index_t> {};  /// relates replacement texts
 
@@ -505,15 +518,15 @@ void
 remove_from_secondary_hash_table (name_t &pp, hash_index_t h)
 {
     auto p = &pp - &*names.data ();
-    auto q = index_t {chop_hash [h]};
-    if (q == p)
+    auto &q = names [chop_hash [h]];
+    if (&q == &pp)
     {
-        chop_hash [h] = equiv (p);
+        chop_hash [h] = pp.chop_link ();
     }
     else
     {
-        while (equiv (q) != p) { q = index_t {equiv (q)}; }
-        equiv (q) = equiv (p);
+        while (q.chop_link() != p) { q = names[q.chop_link()]; }
+        q.set_chop_link(pp.chop_link());
     }
 }
 
@@ -566,11 +579,11 @@ update_secondary_hash (name_t &pp, hash_index_t h)
     while (q != 0)
     {
         check_conflicting_names (q);
-        q = index_t {equiv (q)};
+        q = names[q].chop_link();
     }
 
     // put p at front of secondary hash list
-    equiv (p)     = chop_hash [h];
+    pp.set_chop_link(chop_hash [h]);
     chop_hash [h] = p;
 }
 
@@ -629,11 +642,11 @@ add_new_string (name_t &pp, std::u8string_view id)
 
     if (length - double_chars == 2)  // single-character string
     {
-        equiv (p) = id [1] + 0100000;
+        pp.set_number (id [1]);
     }
     else
     {
-        equiv (p) = string_ptr + 0100000;
+        pp.set_number(string_ptr);
         length -= (double_chars + 1_r);
         if (length > 99)
         {
@@ -745,7 +758,7 @@ add_module_name (index_t length, comparison_result &c, index_t q) -> index_t
     rlink [p] = 0;
 
     c         = equal;
-    equiv (p) = 0;
+    names[p].set_chop_link (0);
 
     name_chars.insert (name_chars.end (), &mod_text [1_r], &mod_text [byte_pointer_t {length + 1}]);
     names.push_back (static_cast<index_t> (name_chars.size ()));
@@ -937,7 +950,7 @@ push_level (index_t p)
 
     stack [stack_ptr++] = cur_state;
     cur_name            = p;
-    cur_repl            = text_pointer_t {equiv (p)};
+    cur_repl            = names [p].replacement_text ();
     zo                  = cur_repl % zz;
     cur_byte            = tok_start [cur_repl];
     cur_end             = tok_start [cur_repl + zz];
@@ -1048,7 +1061,7 @@ get_output_impl ()
             {
             case normal : cur_val = an; return identifier;
 
-            case numeric: cur_val = equiv (an) - 0100000; return number;
+            case numeric: cur_val = names[an].number (); return number;
 
             case simple : push_level (an); continue;
 
@@ -1068,8 +1081,8 @@ get_output_impl ()
 
                 copy_parameter_to_tok_mem ();
 
-                equiv (name_ptr ()) = text_ptr;
-                ilk (name_ptr ())   = simple;
+                names[name_ptr ()].set_replacement_text(text_ptr);
+                names[name_ptr ()].set_ilk(simple);
 
                 if (name_ptr () > names.capacity () - 1)
                     err.overflow ("name");
@@ -1098,7 +1111,7 @@ get_output_impl ()
 
             a -= 024000;
             auto an = index_t {a};
-            if (equiv (an) != 0)
+            if (names[an].chop_link() != 0)
             {
                 push_level (an);
             }
@@ -2428,7 +2441,7 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
             return scan_numeric_cases::reswitch;
         }
 
-        accumulator += next_sign * (equiv (q) - 0100000);
+        accumulator += next_sign * (names[q].number());
         next_sign = 1_r;
         return scan_numeric_cases::consumed;
 
@@ -2483,7 +2496,7 @@ scan_numeric (index_t p)
         err.err_print ("! Value too big: ", accumulator);
         accumulator = 0;
     }
-    equiv (p) = accumulator + 0100000;  // name p now is defined to equal accumulator
+    names[p].set_number (accumulator);
 }
 
 // section 163 nothing tbd
@@ -2711,7 +2724,7 @@ define_macro (ilk_value type)
 {
     auto p = id_lookup (type, current_id);
     scan_repl (type);
-    equiv (p)                 = cur_repl_text;
+    names[p].set_replacement_text (cur_repl_text);
     text_link [cur_repl_text] = 0;
 }
 
@@ -2834,13 +2847,13 @@ scan_pascal_part ()
         text_link [last_unnamed] = cur_repl_text;
         last_unnamed             = cur_repl_text;
     }
-    else if (equiv (p) == 0)  // first module of this name
+    else if (names[p].replacement_text() == 0)  // first module of this name
     {
-        equiv (p) = cur_repl_text;
+        names[p].set_replacement_text(cur_repl_text);
     }
     else
     {
-        p = index_t {equiv (p)};
+        p = names[p].replacement_text();
         while (text_link [text_pointer_t {p}] < module_flag)  // find end of list
         {
             p = index_t {text_link [text_pointer_t {p}]};
@@ -2886,8 +2899,7 @@ initialize ()
 
     // section 48
     rlink [0_r] = 0;
-    equiv (0_r) = 0;
-
+ 
     // section 52
     std::fill (hash.begin (), hash.end (), nullptr);
     std::fill (chop_hash.begin (), chop_hash.end (), 0);
