@@ -248,5 +248,22 @@ With this, we can change the parameter of push_level to name_t &. We take the op
 introduce print(terminal, u8string_view) and remove print_id. Also, we can remove our helper ilk as
 all calls to it can run via name_t now.
 
-Then we introduce fields llink and rlink with getters and setters in name_t and replace the usage of
-the respective two arrays. 
+Then we introduce fields llink and rlink as index_t with getters and setters in name_t and replace 
+the usage of the respective two arrays. We then change both fields to type name_t * and adjust the 
+getters and setters but keep their type index_t. We change the second parameter of 
+compare_module_names to an id and in its callsites surround the index_t p with names[p].content().
+Then we change the last parameter of add_module_name to name_t &.
+
+We now change the llink and rlink getters to returning name_t *, and adjust all code accordingly, i.e.
+we write p.llink () - names.data () to keep dealing with indices. As next step, we change the local
+variables in module_lookup to name_t *, taking great care that 0 corresponds not to nullptr but to
+&names[0]. Similarly, we proceed in prefix_lookup. We then change the setters to name_t * and adjust
+add_module_name accordingly.
+
+We remove mod_text from prefix_lookup, module_lookup and add_module_name and make it an explicit
+parameter instead. Also we remove the explicit dependency on name_chars in the the constructor of
+name_t. We are now in a state that only prefix_lookup, module_lookup, add_new_name and
+add_module_name refer to our names array (besides some lookups that we need to fix later in the
+course of the token mechanism), and these four functions do not depend on anything else except maybe
+err. So we will make them the backbone of our new name_manager.
+

@@ -239,12 +239,14 @@ union equiv_u
     int32_t number;
 };
 
+extern std::vector<name_t> names;
+
 class name_t
 {
-    index_t _start;
+    char8_t * _start;
     name_t *_link = nullptr;
-    index_t _llink = 0;
-    index_t _rlink = 0;
+    name_t * _llink = names.data();
+    name_t * _rlink = names.data();
 
     equiv_u _equiv = {};
     ilk_value _ilk   = normal;
@@ -255,9 +257,9 @@ class name_t
     { return *(this + 1); }
 
   public:
-    name_t (index_t start) : _start (start) {}
-    auto constexpr length () const { return next ()._start - _start; }
-    auto constexpr content () const -> std::u8string_view { return {&name_chars [_start], length ()}; }
+    name_t (char8_t *start) : _start (start) {}
+    auto constexpr length () const { return size_t (next ()._start - _start); }
+    auto constexpr content () const -> std::u8string_view { return {_start, length ()}; }
     auto constexpr link () const { return _link; }
     auto constexpr set_link (auto value) { this->_link = value; }
     auto constexpr llink () const { return _llink; }
@@ -274,12 +276,15 @@ class name_t
     auto constexpr set_replacement_text (auto value) { this->_equiv.repl_text = value; }
 };
 
-auto names = std::vector<name_t> {};
+std::vector<name_t> names = {};
 
 auto text_link = pascal::array<text_pointer_t, text_pointer_t> {};  /// relates replacement texts
 
 // section 39
 // section 40
+
+auto index_of (name_t &name) -> index_t
+{ return &name - names.data(); }
 
 auto &
 next_new_name ()
@@ -520,7 +525,7 @@ add_new_name (name_t &p, ilk_value type, hash_index_t h, std::u8string_view id)
         err.overflow ("name");
 
     name_chars.insert (name_chars.end (), id.begin (), id.end ());
-    names.push_back ({static_cast<index_t> (name_chars.size ())});
+    names.emplace_back (name_chars.data () + name_chars.size ());
 
     if (first_char == u8'"')
     {
@@ -659,84 +664,84 @@ enum comparison_result
 };
 
 auto
-compare_module_names (index_t length, index_t p) -> comparison_result;
+compare_module_names (std::u8string_view new_name, std::u8string_view old_name) -> comparison_result;
 auto
-add_module_name (index_t length, comparison_result &c, index_t q) -> index_t;
+add_module_name (std::u8string_view module_name, comparison_result &c, name_t &predecessor) -> name_t &;
 
 auto
-module_lookup (index_t length) -> index_t
+module_lookup (std::u8string_view module_name) -> name_t &
 {
     auto c = greater;
-    auto q = index_t {0};
+    auto q = &names[0];
     auto p = names[0].rlink();
 
-    while (p != 0)
+    while (p != &names[0])
     {
-        c = compare_module_names (length, p);
+        c = compare_module_names (module_name, p -> content());
         q = p;
         if (c == less)
         {
-            p = names[q].llink ();
+            p = q -> llink ();
         }
         else if (c == greater)
         {
-            p = names[q].rlink ();
+            p = q -> rlink ();
         }
         else
         {
             if (c != equal)
             {
                 err.err_print ("! Incompatible section names");
-                return 0;
+                return names[0];
             }
-            return p;
+            return *p;
         }
     }
 
-    return add_module_name (length, c, q);
+    return add_module_name (module_name, c, *q);
 }
 
 // section 67
 
 auto
-add_module_name (index_t length, comparison_result &c, index_t q) -> index_t
+add_module_name (
+    std::u8string_view module_name, 
+    comparison_result &c, 
+    name_t &predecessor) -> name_t &
 {
-    if (name_chars.size () + length > name_chars.capacity ())
+    if (name_chars.size () + module_name.length () > name_chars.capacity ())
         err.overflow ("byte memory");
 
     if (name_ptr () > names.capacity () - 1)
         err.overflow ("name");
 
-    auto p = name_ptr ();
+    auto new_name = &next_new_name ();
     if (c == less)
     {
-        names[q].set_llink(p);
+        predecessor.set_llink (new_name);
     }
     else
     {
-        names[q].set_rlink(p);
+        predecessor.set_rlink (new_name);
     }
 
-    names[p].set_llink (0);
-    names[p].set_rlink (0);
+    new_name -> set_llink (&names[0]);
+    new_name -> set_rlink (&names[0]);
 
     c         = equal;
-    names[p].set_chop_link (nullptr);
+    new_name -> set_chop_link (nullptr);
 
-    name_chars.insert (name_chars.end (), &mod_text [1_r], &mod_text [byte_pointer_t {length + 1}]);
-    names.push_back (static_cast<index_t> (name_chars.size ()));
+    name_chars.insert (name_chars.end (), module_name.begin(), module_name.end());
+    names.emplace_back (name_chars.data () + name_chars.size ());
 
-    return p;
+    return *new_name;
 }
 
 // section 68
 
 auto
-compare_module_names (index_t length, index_t p) -> comparison_result
+compare_module_names (std::u8string_view new_name, std::u8string_view old_name) -> comparison_result
 {
-    auto   old_name = names[p].content();
-    auto   new_name = std::u8string_view {&mod_text [1_r], length};
-
     size_t i        = 0;
     size_t len      = std::min (old_name.length (), new_name.length ());
 
@@ -753,36 +758,36 @@ compare_module_names (index_t length, index_t p) -> comparison_result
 // section 69
 
 auto
-prefix_lookup (index_t length) -> index_t
+prefix_lookup (std::u8string_view module_name) -> name_t &
 {
-    auto resume_node  = index_t {0};
+    auto resume_node  = &names[0];
     auto current_node = names[0].rlink();
     auto count        = index_t {0};
-    auto result       = index_t {0};
+    auto result       = &names[0];
 
-    while (current_node != 0)
+    while (current_node != &names[0])
     {
-        auto c = compare_module_names (length, current_node);
+        auto c = compare_module_names (module_name, current_node -> content());
         if (c == less)
         {
-            current_node = names[current_node].llink ();
+            current_node = current_node -> llink ();
         }
         else if (c == greater)
         {
-            current_node = names[current_node].rlink ();
+            current_node = current_node -> rlink ();
         }
         else
         {
             result = current_node;
             ++count;
-            resume_node = names[current_node].rlink ();
-            current_node = names[current_node].llink ();
+            resume_node = current_node -> rlink ();
+            current_node = current_node -> llink ();
         }
 
-        if (current_node == 0)
+        if (current_node == &names[0])
         {
             current_node = resume_node;
-            resume_node  = 0;
+            resume_node  = &names[0];
         }
     }
 
@@ -798,7 +803,7 @@ prefix_lookup (index_t length) -> index_t
         }
     }
 
-    return result;
+    return *result;
 }
 
 // section 70
@@ -1051,7 +1056,7 @@ get_output_impl ()
                 if (name_ptr () > names.capacity () - 1)
                     err.overflow ("name");
 
-                names.push_back (static_cast<index_t> (name_chars.size ()));
+                names.emplace_back (name_chars.data () + name_chars.size ());
 
                 if (text_ptr > max_texts - zz)
                     err.overflow ("text");
@@ -2037,7 +2042,7 @@ skip_comment ()
 // section 143, 144
 
 /// name of module just scanned
-index_t cur_module;
+name_t * cur_module;
 bool    scanning_hex = false;  /// are we scanning a hexadecimal constant
 
 // section 145 - 155
@@ -2249,11 +2254,11 @@ scan_module_name ()
     {
         if (mod_text [k] == u8'.' && mod_text [k - 1_r] == u8'.' && mod_text [k - 2_r] == u8'.')
         {
-            cur_module = prefix_lookup (k - 3);
+            cur_module = &prefix_lookup ({&mod_text[1_r], static_cast <size_t> (k) - 3});
         }
         else
         {
-            cur_module = module_lookup (k);
+            cur_module = &module_lookup ({&mod_text [1_r], k});
         }
     }
 }
@@ -2520,7 +2525,7 @@ scan_repl (uint8_t type)
         case identifier:
         {
             auto &name = id_lookup(normal, current_id);
-            a = &name - names.data();
+            a = index_of (name);
             app_repl (0200 + (a >> 8));
             a &= 0xFF;
             break;
@@ -2529,8 +2534,8 @@ scan_repl (uint8_t type)
         case module_name:
             if (type == module_name)
             {
-                app_repl (0250 + (cur_module >> 8));
-                a = cur_module & 0xFF;
+                app_repl (0250 + (index_of (*cur_module) >> 8));
+                a = index_of (*cur_module) & 0xFF;
                 break;
             }
             done = true;
@@ -2786,10 +2791,10 @@ scan_definition_part ()
 void
 scan_pascal_part ()
 {
-    index_t p;
+    name_t * p = nullptr;
     switch (next_control)
     {
-    case begin_pascal: p = 0_r; break;
+    case begin_pascal: break;
     case module_name:
         p = cur_module;
 
@@ -2805,25 +2810,26 @@ scan_pascal_part ()
         }
         break;
 
-    default: return;
+    default: 
+        return;
     }
 
     // Insert module number into tok_mem
     store_two_bytes (0150000 + module_count);  // 01500000 = 0320 * 0400
     scan_repl (module_name);                   // now cur_repl_text points to the replacement text
 
-    if (p == 0)  // unnamed module
+    if (p == nullptr)  // unnamed module
     {
         text_link [last_unnamed] = cur_repl_text;
         last_unnamed             = cur_repl_text;
     }
-    else if (names[p].replacement_text() == 0)  // first module of this name
+    else if (p -> replacement_text() == 0)  // first module of this name
     {
-        names[p].set_replacement_text(cur_repl_text);
+        p -> set_replacement_text(cur_repl_text);
     }
     else
     {
-        text_pointer_t t = names[p].replacement_text();
+        text_pointer_t t = p -> replacement_text();
         while (text_link [t] < module_flag)  // find end of list
         {
             t = text_link [t];
@@ -2850,12 +2856,13 @@ initialize ()
     open_output ();
 
     // section 42
-    names.clear ();
-    names.reserve (max_names + 1);
-    names.resize (2, 0);  // one more to make name 0 of length 0
-
     name_chars.clear ();
     name_chars.reserve (max_bytes + 1);
+
+    names.clear ();
+    names.reserve (max_names + 1);
+    names.resize (2, name_chars.data ());  // one more to make name 0 of length 0
+
 
     string_ptr     = 256_r;
     pool_check_sum = 271828;
