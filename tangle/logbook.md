@@ -236,3 +236,17 @@ We thus create a union equiv_u with exactly these three use cases and change the
 name_t to this type. We then change our function equiv to refer to the chop_link member. We then
 add three getters and setters to name_t, one for each use case. Step by step, we change the calls to
 equiv(p) to something like names[p].number() taking care of the respective use case.
+
+Next we change chop_hash and chop_link to name_t *, and adjust the code accordingly. Then we 
+surround every call to id_lookup with names[], and adjust the following lines accordingly. We are
+now in a position to change id_lookup's return value to name_t &, thus removing all the names[] we
+just introduced. 
+
+We move on to out_state name_field, which we turn into name_t *. Automatically, this affects cur_name
+as well (which is a reference to cur_state.name_field), so we adjust all references to it as well. 
+With this, we can change the parameter of push_level to name_t &. We take the opportunity to 
+introduce print(terminal, u8string_view) and remove print_id. Also, we can remove our helper ilk as
+all calls to it can run via name_t now.
+
+Then we introduce fields llink and rlink with getters and setters in name_t and replace the usage of
+the respective two arrays. 
