@@ -267,3 +267,20 @@ add_module_name refer to our names array (besides some lookups that we need to f
 course of the token mechanism), and these four functions do not depend on anything else except maybe
 err. So we will make them the backbone of our new name_manager.
 
+We move name_t and related structures to name.h, so we don't have to use name_manager if we just deal
+with names. name_manager goes to name_manager.h, and we instantiate it as name_mgr in tangle.cpp. We
+make names and name_chars part of name_manager but for the transition we keep them public and add
+names and name_chars as references to the respective members in name_manager.
+
+Then we move the first helper functions into name_manager: index_of, next_new_name, is_next_new_name, 
+name_ptr, and try to proceed as usual. However, we notice that we are still not done properly with
+the split and need to cut more precisely. We introduce name_storage for name_chars and names as a
+small wrapper around those two with a defined semantic interface including adding a new name,
+removing the last name, and referring to name 0, to the last name, and to the next new name.
+
+name_manager itself comprises lookup for names (identifiers and strings), module names, and module
+names by prefix, as well as adding a simple macro with replacement text and a couple of small
+functions forwarding to name_storage (most of which will be removed later).
+
+We will now refactor the functions to increase cohesion and reduce coupling (making their signatures
+smaller). 

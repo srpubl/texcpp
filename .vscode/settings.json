@@ -2,5 +2,6 @@
     "clangd.arguments": [
         "-background-index",
         "--compile-commands-dir=out/build"
-    ]
+    ],
+    "cmake.buildDirectory": "${workspaceFolder}/out/build"
 }
