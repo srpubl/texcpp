@@ -2,6 +2,8 @@
 
 #include <array>
 #include <string_view>
+
+#include "hash_bucket.h"
 #include "name.h"
 #include "name_storage.h"
 
@@ -13,11 +15,14 @@ using on_error_t      = void (*) ();
 using on_error_id_t   = void (*) (std::u8string_view id);
 using on_add_string_t = index_t (*) (std::u8string_view id);
 
+using hash_bucket_name_t_link = hash_bucket<name_t, &name_t::link, &name_t::set_link>;
+using hash_bucket_name_t_chop_link = hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;
+
 class name_manager
 {
     name_storage storage;
-    std::array<name_t *, hash_size> hash_bucket = {};
-    std::array<name_t *, hash_size> chop_hash_bucket = {};
+    std::array<hash_bucket_name_t_link, hash_size> hash_bucket = {};
+    std::array<hash_bucket_name_t_chop_link, hash_size> chop_hash_bucket = {};
 
     on_error_t on_already_appeared = nullptr;
     on_error_t on_defined_before = nullptr;

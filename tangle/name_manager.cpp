@@ -1,6 +1,7 @@
 #include "name_manager.h"
 
 #include "config.h"
+#include <string_view>
 
 using chopped_id_t = std::array<char8_t, unambig_length + 1>;
 
@@ -39,8 +40,8 @@ void
 name_manager::initialize (size_t max_chars, size_t max_names)
 {
     storage.initialize(max_chars, max_names);
-    std::fill (hash_bucket.begin (), hash_bucket.end (), nullptr);
-    std::fill (chop_hash_bucket.begin (), chop_hash_bucket.end (), nullptr);
+    std::fill (hash_bucket.begin (), hash_bucket.end (), hash_bucket_name_t_link{});
+    std::fill (chop_hash_bucket.begin (), chop_hash_bucket.end (), hash_bucket_name_t_chop_link {});
 }
 
 name_t &
@@ -49,22 +50,7 @@ name_manager::lookup (ilk_value ilk, std::u8string_view id)
     auto  h    = compute_hash_code (id);
     auto &name = compute_name_location (h, id);
 
-    if (storage.is_next_new (name) || ilk != normal)
-    {
-        update_name (name, ilk, id);
-    }
-
-    return name;
-}
-
-void
-name_manager::update_name (name_t &name, ilk_value new_ilk, std::u8string_view id)
-{
-    if (!storage.is_next_new (name))
-    {
-        double_definition_error (name, new_ilk);
-    }
-    else
+    if (storage.is_next_new (name))
     {
         storage.add (id);
 
@@ -75,61 +61,59 @@ name_manager::update_name (name_t &name, ilk_value new_ilk, std::u8string_view i
         }
         else
         {
-            if (new_ilk == normal)
+            if (ilk == normal)
             {
                 update_secondary_hash (name);
             }
-            name.set_ilk (new_ilk);
+            name.set_ilk (ilk);
         }
+    } 
+    else if (ilk != normal)
+    {
+        double_definition_error (name, ilk);
+        
+        // the second definition wins: we force a new ilk on p
+        name.set_ilk (ilk);
     }
+
+    return name;
 }
 
 auto
 name_manager::compute_name_location (index_t hash, std::u8string_view id) -> name_t &
 {
-    auto p = hash_bucket [hash];
+    auto &bucket = hash_bucket [hash];
+    auto name = bucket.find([id](name_t &p){ return p.content () == id; });
 
-    while (p)
-    {
-        if (p->content () == id)
-            return *p;
+    if (name)
+        return *name;
 
-        p = p->link ();
-    }
-
-    // insert p at beginning of hash list
-    auto &new_name = storage.next_new();
-    new_name.set_link (hash_bucket [hash]);
-    hash_bucket [hash] = &new_name;
-
-    return new_name;
+    bucket.prepend(storage.next_new());
+    return storage.next_new();
 }
 
 void
 name_manager::update_secondary_hash (name_t &name)
 {
-    chopped_id_t chopped_id_buf = {};
-    auto chopped_id = chop_id (name.content(), chopped_id_buf);
-    auto hash = compute_hash_code (chopped_id);
+    auto buf        = chopped_id_t {};
+    auto chopped_id = chop_id (name.content(), buf);
+    auto hash       = compute_hash_code (chopped_id);
+    auto &bucket    = chop_hash_bucket [hash];
 
-    auto q = chop_hash_bucket [hash];
-
-    while (q)
+    if (on_id_conflict)
     {
-        chopped_id_t old_chopped_id_buf;
-        auto old_chopped_id = chop_id (q -> content (), old_chopped_id_buf);
-
-        if (old_chopped_id == chopped_id && on_id_conflict)
+        bucket.for_each([this, chopped_id](name_t &old_name)
         {
-            on_id_conflict (q -> content());
-        }
-
-        q = q -> chop_link();
+            chopped_id_t buf;
+            auto id = old_name.content ();
+            if (chop_id (id, buf) == chopped_id)
+            {
+                on_id_conflict (id);
+            }
+        });
     }
 
-    // put name at front of secondary hash list
-    name.set_chop_link(chop_hash_bucket [hash]);
-    chop_hash_bucket [hash] = &name;
+    bucket.prepend(name);
 }
 
 
@@ -140,16 +124,7 @@ name_manager::remove_from_secondary_hash_table (name_t &name)
     auto chopped_id = chop_id (name.content(), chopped_id_buf);
     auto hash = compute_hash_code (chopped_id);
 
-    auto q = chop_hash_bucket [hash];
-    if (q == &name)
-    {
-        chop_hash_bucket [hash] = name.chop_link ();
-    }
-    else
-    {
-        while (q->chop_link() != &name) { q = q->chop_link(); }
-        q->set_chop_link (name.chop_link());
-    }
+    chop_hash_bucket [hash].remove (name);
 }
 
 void
@@ -173,9 +148,6 @@ name_manager::double_definition_error (name_t &name, ilk_value ilk)
     {
         if (on_defined_before) { on_defined_before (); }
     }
-
-    // the second definition wins: we force a new ilk on p
-    name.set_ilk (ilk);
 }
 
 enum comparison_result
