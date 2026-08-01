@@ -1,7 +1,8 @@
 #include "name_manager.h"
 
-#include "config.h"
+#include <algorithm>
 #include <string_view>
+#include "config.h"
 
 using chopped_id_t = std::array<char8_t, unambig_length + 1>;
 
