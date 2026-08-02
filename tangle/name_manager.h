@@ -3,13 +3,13 @@
 #include <array>
 #include <string_view>
 
+#include "config.h"
+
 #include "hash_bucket.h"
 #include "name.h"
 #include "name_storage.h"
 
 using namespace std::literals;
-
-constexpr size_t hash_size    = 353;    /// should be prime
 
 using on_error_t      = void (*) ();
 using on_error_id_t   = void (*) (std::u8string_view id);
@@ -21,8 +21,9 @@ using hash_bucket_name_t_chop_link = hash_bucket<name_t, &name_t::chop_link, &na
 class name_manager
 {
     name_storage storage;
-    std::array<hash_bucket_name_t_link, hash_size> hash_bucket = {};
-    std::array<hash_bucket_name_t_chop_link, hash_size> chop_hash_bucket = {};
+    std::array<hash_bucket_name_t_link, config::hash_size> hash_bucket = {};
+    std::array<hash_bucket_name_t_chop_link, config::hash_size> chop_hash_bucket = {};
+    name_t *root = nullptr;
 
     on_error_t on_already_appeared = nullptr;
     on_error_t on_defined_before = nullptr;
@@ -58,9 +59,9 @@ public:
     void
     add_simple (text_pointer_t replacement_text)
     {
-        storage.next_new ().set_replacement_text (replacement_text);
-        storage.next_new ().set_ilk(simple);
-        storage.add(u8""sv);
+        auto &new_name = storage.add(u8""sv);
+        new_name.set_ilk(simple);
+        new_name.set_replacement_text (replacement_text);
     }
 
     constexpr auto 
@@ -71,8 +72,8 @@ public:
     name_at (index_t index) const
     { return storage.name_at(index); }
 
-    constexpr auto &
-    next_new () const { return storage.next_new (); }
+    constexpr auto
+    index_of_next_new () const { return storage.index_of(storage.next_new ()); }
 
     constexpr auto &
     last () const { return storage.last (); }
@@ -81,9 +82,6 @@ public:
     remove_last () { storage.remove_last (); }
 
 private:
-    auto
-    compute_name_location (index_t hash, std::u8string_view id) -> name_t &;
-
     void
     update_name (name_t &p, ilk_value t, std::u8string_view id);
 

@@ -6,7 +6,6 @@
 
 class name_storage 
 {
-public:
     std::vector<char8_t> chars = {};
     std::vector<name_t> names = {};
 
@@ -19,7 +18,7 @@ public:
 
         names.clear ();
         names.reserve (max_names + 1);
-        names.resize (2, {chars.data (), names.data()});  // one more to make name 0 of length 0
+        names.resize (2, name_t {chars.data ()});  // one more to make name 0 of length 0
     }
 
     auto &
@@ -35,18 +34,16 @@ public:
     { return names[index]; }
 
     constexpr auto &
-    next_new ()
-    { return *names.rbegin (); }
-
-    constexpr auto &
     next_new () const
     { return *names.rbegin (); }
 
-    constexpr auto
-    is_next_new (name_t const &name) const
-    { return &name == &next_new(); }
+private:
+    constexpr auto &
+    next_new ()
+    { return *names.rbegin (); }
 
-    void
+public:
+    name_t &
     add (std::u8string_view id)
     {
         if (chars.size () + id.length () > chars.capacity ())
@@ -55,8 +52,12 @@ public:
         if (names.size () > names.capacity () - 1)
             throw std::length_error ("name");
 
+        auto &new_name = next_new ();
+
         chars.insert (chars.end (), id.begin (), id.end ());
-        names.emplace_back (chars.data () + chars.size (), names.data());
+        names.emplace_back (chars.data () + chars.size ());
+
+        return new_name;
     }
 
     // The last name that has actually been used.
@@ -65,5 +66,6 @@ public:
 
     void
     remove_last () { names.pop_back(); }
+
 };
 

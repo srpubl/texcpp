@@ -1,17 +1,18 @@
-#include "name_manager.h"
-
 #include <algorithm>
 #include <string_view>
-#include "config.h"
 
-using chopped_id_t = std::array<char8_t, unambig_length + 1>;
+#include "config.h"
+#include "name_manager.h"
+
+
+using chopped_id_t = std::array<char8_t, config::unambig_length + 1>;
 
 static auto
 compute_hash_code (std::u8string_view id) -> index_t
 {
     auto h = id [0];
     id.remove_prefix (1);
-    for (auto c : id) { h = (h + h + c) % hash_size; };
+    for (auto c : id) { h = (h + h + c) % config::hash_size; };
     return h;
 }
 
@@ -21,7 +22,7 @@ chop_id (std::u8string_view id, chopped_id_t &chopped_id)
     index_t length = 0;
     for (auto ch : id)
     {
-        if (length == unambig_length)
+        if (length == config::unambig_length)
             break;
 
         if (ch == u8'_')
@@ -40,6 +41,7 @@ chop_id (std::u8string_view id, chopped_id_t &chopped_id)
 void
 name_manager::initialize (size_t max_chars, size_t max_names)
 {
+    root = nullptr;
     storage.initialize(max_chars, max_names);
     std::fill (hash_bucket.begin (), hash_bucket.end (), hash_bucket_name_t_link{});
     std::fill (chop_hash_bucket.begin (), chop_hash_bucket.end (), hash_bucket_name_t_chop_link {});
@@ -48,49 +50,42 @@ name_manager::initialize (size_t max_chars, size_t max_names)
 name_t &
 name_manager::lookup (ilk_value ilk, std::u8string_view id)
 {
-    auto  h    = compute_hash_code (id);
-    auto &name = compute_name_location (h, id);
-
-    if (storage.is_next_new (name))
-    {
-        storage.add (id);
-
-        if (id [0] == u8'"')
-        {
-            name.set_ilk (numeric);
-            name.set_number (on_add_string (id));
-        }
-        else
-        {
-            if (ilk == normal)
-            {
-                update_secondary_hash (name);
-            }
-            name.set_ilk (ilk);
-        }
-    } 
-    else if (ilk != normal)
-    {
-        double_definition_error (name, ilk);
-        
-        // the second definition wins: we force a new ilk on p
-        name.set_ilk (ilk);
-    }
-
-    return name;
-}
-
-auto
-name_manager::compute_name_location (index_t hash, std::u8string_view id) -> name_t &
-{
+    auto  hash   = compute_hash_code (id);
     auto &bucket = hash_bucket [hash];
     auto name = bucket.find([id](name_t &p){ return p.content () == id; });
 
     if (name)
+    {
+        if (ilk != normal)
+        {
+            double_definition_error (*name, ilk);
+            
+            // the second definition wins: we force a new ilk on p
+            name -> set_ilk (ilk);
+        }
         return *name;
+    }
 
-    bucket.prepend(storage.next_new());
-    return storage.next_new();
+    // If not found add new name
+
+    auto &new_name = storage.add (id);
+    bucket.prepend(new_name);
+
+    if (id [0] == u8'"')
+    {
+        new_name.set_ilk (numeric);
+        new_name.set_number (on_add_string (id));
+    }
+    else
+    {
+        new_name.set_ilk (ilk);
+        if (ilk == normal)
+        {
+            update_secondary_hash (new_name);
+        }
+    }
+
+    return new_name;
 }
 
 void
@@ -129,15 +124,15 @@ name_manager::remove_from_secondary_hash_table (name_t &name)
 }
 
 void
-name_manager::double_definition_error (name_t &name, ilk_value ilk)
+name_manager::double_definition_error (name_t &name, ilk_value new_ilk)
 {
     if (name.ilk () == normal)  // We have seen p before it was used
     {
-        if (ilk == numeric)  // We don't allow numeric macros to be defined after their first use
+        if (new_ilk == numeric)  // We don't allow numeric macros to be defined after their first use
         {
             if (on_already_appeared) { on_already_appeared (); }
 
-            // nevertheless we treat it as numeric from now on
+            // nevertheless we will treat it as numeric from now on
             // numeric macros are not stored in secondary hash table
             remove_from_secondary_hash_table (name);
         }
@@ -180,43 +175,40 @@ auto
 name_manager::lookup_module (std::u8string_view module_name) -> name_t &
 {
     auto c = greater;
-    auto q = &storage.name_0();
-    auto p = storage.name_0().rlink();
+    name_t * last_node = nullptr;
+    name_t * current_node = root;
 
-    while (p != &storage.name_0())
+    while (current_node)
     {
-        c = compare_module_names (module_name, p -> content());
-        q = p;
-        if (c == less)
+        last_node = current_node;
+        c = compare_module_names (module_name, current_node -> content());
+        switch (c)
         {
-            p = q -> llink ();
-        }
-        else if (c == greater)
-        {
-            p = q -> rlink ();
-        }
-        else
-        {
-            if (c != equal)
-            {
-                if (on_incompatible) { on_incompatible (); }
-                return storage.name_0();
-            }
-            return *p;
-        }
+        case less:    current_node = current_node -> llink (); break;
+        case greater: current_node = current_node -> rlink (); break;
+        
+        case equal:   
+            return *current_node; 
+        
+        default:
+            if (on_incompatible) { on_incompatible (); }
+            return storage.name_0();
+        }        
     }
 
-    auto &new_name = storage.next_new ();
-    
-    storage.add(module_name);
+    auto &new_name = storage.add(module_name);
 
-    if (c == less)
+    if (!last_node)
     {
-        q -> set_llink (&new_name);
+        root = &new_name;
+    } 
+    else if (c == less)
+    {
+        last_node -> set_llink (&new_name);
     }
     else
     {
-        q -> set_rlink (&new_name);
+        last_node -> set_rlink (&new_name);
     }
 
     return new_name;
@@ -225,34 +217,29 @@ name_manager::lookup_module (std::u8string_view module_name) -> name_t &
 auto
 name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
 {
-    auto resume_node  = &storage.name_0();
-    auto current_node = storage.name_0().rlink();
-    auto count        = index_t {0};
-    auto result       = &storage.name_0();
+    name_t * current_node = root;
+    name_t * resume_node  = nullptr;
+    name_t * result       = nullptr;
+    auto count            = 0;
 
-    while (current_node != &storage.name_0())
+    while (current_node)
     {
-        auto c = compare_module_names (module_name, current_node -> content());
-        if (c == less)
+        switch (compare_module_names (module_name, current_node -> content()))
         {
-            current_node = current_node -> llink ();
-        }
-        else if (c == greater)
-        {
-            current_node = current_node -> rlink ();
-        }
-        else
-        {
-            result = current_node;
+        case less:    current_node = current_node -> llink (); break;
+        case greater: current_node = current_node -> rlink (); break;
+
+        default:
             ++count;
+            result = current_node;
             resume_node = current_node -> rlink ();
             current_node = current_node -> llink ();
         }
 
-        if (current_node == &storage.name_0())
+        if (!current_node)
         {
             current_node = resume_node;
-            resume_node  = &storage.name_0();
+            resume_node  = nullptr;
         }
     }
 
@@ -262,9 +249,9 @@ name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
     }
     else if (count > 1)
     {
-            if (on_too_many_matches) { on_too_many_matches (); } 
+        if (on_too_many_matches) { on_too_many_matches (); } 
     }
 
-    return *result;
+    return result ? *result : storage.name_0();
 }
 

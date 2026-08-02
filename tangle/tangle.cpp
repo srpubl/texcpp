@@ -82,7 +82,7 @@ open_output ()
 }
 
 // section 27
-using buf_index_t = pascal::int_range<0, buf_size>;
+using buf_index_t = pascal::int_range<0, config::buf_size>;
 auto buffer       = pascal::array<buf_index_t, ascii_code_t> {};  /// The input line buffer. Holds valid
                                                                   /// content from 0 to limit-1.
 
@@ -116,7 +116,7 @@ input_ln (pascal::text_file &file)
         }
 
         // If input line is longer than buffer: discard all extra characters and signal error
-        if (limit == buf_size)
+        if (limit == config::buf_size)
         {
             while (!file.eol ()) { file.get (); }
             --limit;
@@ -173,7 +173,7 @@ print_error_location_input (terminal &term)
 // section 33
 
 // defined in later section but needed here already
-auto out_buf = out_buffer {line_length, pascal_file};
+auto out_buf = out_buffer {config::line_length, pascal_file};
 
 void
 print_error_location_output (terminal &term)
@@ -193,16 +193,16 @@ print_error_location_output (terminal &term)
 auto constexpr zz     = 3_r;  /// we multiply the token capacity by approximately this amount
 
 using index_t         = uint32_t;  /// used to store indices in arrays
-using text_pointer_t  = pascal::int_range<0, max_texts>;
-using byte_pointer_t  = pascal::int_range<0, max_bytes>;
-using token_pointer_t = pascal::int_range<0, max_toks>;
+using text_pointer_t  = pascal::int_range<0, config::max_texts>;
+using byte_pointer_t  = pascal::int_range<0, config::max_bytes>;
+using token_pointer_t = pascal::int_range<0, config::max_toks>;
 using token_bank_t    = pascal::int_range<0, zz - 1_r>;
 
 name_manager name_mgr;
 
 auto tok_mem = pascal::array<token_bank_t, pascal::array<token_pointer_t, ascii_code_t>> {};  /// tokens
 auto tok_start = pascal::array<text_pointer_t, index_t> {};  /// directory into tok mem
-auto link      = std::array<index_t, max_names> {};          /// hash table
+auto link      = std::array<index_t, config::max_names> {};          /// hash table
 
 auto text_link = pascal::array<text_pointer_t, text_pointer_t> {};  /// relates replacement texts
 
@@ -227,7 +227,7 @@ auto z        = token_bank_t {1};                                 /// current se
 // section 48
 // section 49
 // section 50
-using chopped_id_t = std::array<char8_t, unambig_length + 1>;
+using chopped_id_t = std::array<char8_t, config::unambig_length + 1>;
 
 auto double_chars     = buf_index_t {};
 auto current_id       = std::u8string_view {};
@@ -303,7 +303,7 @@ on_add_string (std::u8string_view id) -> index_t
 // section 65
 
 /// Index in one name
-using inname_index_t = pascal::int_range<0, longest_name>;
+using inname_index_t = pascal::int_range<0, config::longest_name>;
 auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name being sought for
 
 // section 66
@@ -313,7 +313,7 @@ auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name
 // section 70
 
 /// final text_link in module replacement texts
-auto module_flag  = text_pointer_t {max_texts};
+auto module_flag  = text_pointer_t {config::max_texts};
 auto last_unnamed = text_pointer_t {0};  /// most recent replacement text of unnamed module
 
 // section 71 not required
@@ -338,7 +338,7 @@ constexpr auto join          = ascii_code_t {0177};  /// @& is the item concaten
 void
 store_two_bytes (uint16_t x)
 {
-    if (tok_ptr [z] + 2_r > max_toks)
+    if (tok_ptr [z] + 2_r > config::max_toks)
         err.overflow ("token");
 
     tok_mem [z][tok_ptr [z]]       = x >> 8;
@@ -351,7 +351,7 @@ store_two_bytes (uint16_t x)
 // section 77 nothing tbd
 // section 78
 
-using mod_pointer_t = pascal::int_range<0, max_modules>;
+using mod_pointer_t = pascal::int_range<0, config::max_modules>;
 
 struct output_state
 {
@@ -373,8 +373,8 @@ auto &cur_name  = cur_state.name_field;  /// pointer to current name being expan
 auto &cur_repl  = cur_state.repl_field;  /// pointer to current replacement text
 auto &cur_mod   = cur_state.mod_field;   /// current module number being expanded
 
-auto  stack     = pascal::int_range_array<1, stack_size, output_state> {};
-auto  stack_ptr = pascal::int_range<0, stack_size> {};
+auto  stack     = pascal::int_range_array<1, config::stack_size, output_state> {};
+auto  stack_ptr = pascal::int_range<0, config::stack_size> {};
 
 /// section 80
 
@@ -417,7 +417,7 @@ initialize_output_stacks ()
 void
 push_level (name_t const &name)
 {
-    if (stack_ptr == stack_size)
+    if (stack_ptr == config::stack_size)
         err.overflow ("stack");
 
     stack [stack_ptr++] = cur_state;
@@ -556,7 +556,7 @@ get_output_impl ()
 
                 name_mgr.add_simple (text_ptr);
 
-                if (text_ptr > max_texts - zz)
+                if (text_ptr > config::max_texts - zz)
                     err.overflow ("text");
 
                 text_link [text_ptr]      = 0_r;
@@ -643,7 +643,7 @@ void
 app_repl (uint8_t b)
 {
     auto first_free = tok_ptr [z];
-    if (first_free == max_toks)
+    if (first_free == config::max_toks)
         err.overflow ("token");
 
     tok_mem [z][first_free] = b;
@@ -661,7 +661,7 @@ copy_parameter_to_tok_mem ()
         uint8_t b = tok_mem [zo][token_pointer_t {cur_byte++}];
         if (b == param)
         {
-            store_two_bytes (name_mgr.index_of(name_mgr.next_new()) + 077777);
+            store_two_bytes (name_mgr.index_of_next_new() + 077777);
         }
         else
         {
@@ -929,7 +929,7 @@ send_the_output ()
 void
 send_output_identifier ()
 {
-    auto   buffer = std::array<ascii_code_t, max_id_length> {};
+    auto   buffer = std::array<ascii_code_t, config::max_id_length> {};
     size_t k      = 0;
 
     for (auto ch : name_mgr.name_at (cur_val).content())
@@ -951,13 +951,13 @@ send_output_identifier ()
 void
 send_output_string ()
 {
-    auto   buffer = std::array<ascii_code_t, line_length> {};
+    auto   buffer = std::array<ascii_code_t, config::line_length> {};
     size_t k      = 0;
     buffer [0]    = u8'\'';
     ascii_code_t ch;
     do
     {
-        if (k < line_length - 1)
+        if (k < config::line_length - 1)
         {
             ++k;
         }
@@ -965,7 +965,7 @@ send_output_string ()
     }
     while (ch != u8'\'' && stack_ptr != 0);
 
-    if (k == line_length - 1)
+    if (k == config::line_length - 1)
     {
         err.err_print ("! String too long");
     }
@@ -981,20 +981,20 @@ send_output_string ()
 void
 send_output_verbatim_string ()
 {
-    auto         buffer = std::array<ascii_code_t, line_length> {};
+    auto         buffer = std::array<ascii_code_t, config::line_length> {};
     size_t       k      = 0;
     ascii_code_t ch;
     do
     {
         buffer [k] = ch = get_output ();
-        if (k < line_length - 1)
+        if (k < config::line_length - 1)
         {
             ++k;
         }
     }
     while (ch != verbatim && stack_ptr != 0);
 
-    if (k == line_length - 1)
+    if (k == config::line_length - 1)
     {
         err.err_print ("! Verbatim string too long");
     }
@@ -1031,7 +1031,7 @@ void
 finish_real_constant (bool start_with_dot)
 {
     ascii_code_t cur_char = get_output ();
-    auto         buffer   = std::array<ascii_code_t, line_length> {};
+    auto         buffer   = std::array<ascii_code_t, config::line_length> {};
     size_t       k        = 0;
     if (start_with_dot)
     {
@@ -1040,7 +1040,7 @@ finish_real_constant (bool start_with_dot)
 
     do
     {
-        if (k < line_length)
+        if (k < config::line_length)
         {
             ++k;
         }
@@ -1051,7 +1051,7 @@ finish_real_constant (bool start_with_dot)
 
         if (last_char == u8'E' && (cur_char == u8'+' || cur_char == u8'-'))
         {
-            if (k < line_length)
+            if (k < config::line_length)
             {
                 ++k;
             }
@@ -1065,7 +1065,7 @@ finish_real_constant (bool start_with_dot)
     }
     while (cur_char == u8'E' || is_digit (cur_char));
 
-    if (k == line_length)
+    if (k == config::line_length)
     {
         err.err_print ("! Fraction too long");
     }
@@ -1078,7 +1078,7 @@ finish_real_constant (bool start_with_dot)
 void
 send_output_module_number ()
 {
-    constexpr size_t buf_size  = max_digits + 3;  // digits + 2 braces + 1 colon
+    constexpr size_t buf_size  = config::max_digits + 3;  // digits + 2 braces + 1 colon
     auto             buffer    = std::array<char8_t, buf_size> {};
     auto            *write_ptr = buffer.data ();
     *write_ptr++               = (brace_level == 0 ? u8'{' : u8'[');
@@ -1088,7 +1088,7 @@ send_output_module_number ()
         cur_val      = -cur_val;
     }
 
-    ascii_code_t digit_buffer [max_digits];
+    ascii_code_t digit_buffer [config::max_digits];
     auto         end   = std::end (digit_buffer);
     auto         begin = to_chars (end, cur_val);
     write_ptr          = std::copy (begin, end, write_ptr);
@@ -1815,7 +1815,7 @@ put_module_name_in_mod_text () -> inname_index_t
         }
 
         ++loc;
-        if (k < longest_name - 1)
+        if (k < config::longest_name - 1)
         {
             ++k;
         }
@@ -1830,7 +1830,7 @@ put_module_name_in_mod_text () -> inname_index_t
         mod_text [k] = d;
     }
 
-    if (k > longest_name - 2)
+    if (k > config::longest_name - 2)
     {
         err.terminal ().print_nl ("! Section name too long: ");
         print (err.terminal (), {&mod_text.data ()[1], 25});
@@ -2080,7 +2080,7 @@ scan_repl (uint8_t type)
 
     next_control = a & 0xFF;
     ensure_parantheses_balance (balance);
-    if (text_ptr > max_texts - zz)
+    if (text_ptr > config::max_texts - zz)
         err.overflow ("text");
 
     cur_repl_text             = text_ptr;
@@ -2368,7 +2368,7 @@ initialize ()
     open_output ();
 
     // section 42
-    name_mgr.initialize(max_bytes, max_names);
+    name_mgr.initialize(config::max_bytes, config::max_names);
 
     string_ptr     = 256_r;
     pool_check_sum = 271828;
@@ -2422,7 +2422,7 @@ tangle (
 
     initialize ();
     initialize_input_system ();
-    term.print_ln ("{}", banner);
+    term.print_ln ("{}", config::banner);
 
     err.set_print_error_location (print_error_location_input);
     module_count = 0_r;
@@ -2441,7 +2441,7 @@ tangle (
         term.print_nl ("{} strings written to string pool file.", string_ptr - 256);
         pool.write ('*');
 
-        char digit_buffer [max_digits];
+        char digit_buffer [config::max_digits];
         std::to_chars (digit_buffer, std::end (digit_buffer), pool_check_sum);
         for (size_t i = 0; i < 9; ++i) { write (pool, digit_buffer [i]); }
         pool.write_line ();

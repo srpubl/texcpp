@@ -361,3 +361,28 @@ There are two hash maps in the code that run via `name_t::_link` and `name_t::_c
 their code we introduce a template that uses specified getters and setters. This cleans up the code by
 separating hash map logic from the rest.
 
+#### Removing compute_name_location
+
+This function does too much and not enough: It searches the bucket list for the given id and returns it.
+If it doesn't find it it adds a new item. This necessitates `lookup` to check whether the result is a
+newly added item, allowing it to add extra info. We merge both functions and thus streamline the lookup
+code: If the item is found an additional check is performed that there is no double definition. 
+Otherwise we add a new name and fill it up accordingly. With this we can also remove `is_next_new` from
+`name_storage`, making the interface cleaner.
+
+#### Merging `next_new` into `add`
+
+We notice that `next_new` is very often called just before `add`. We thus let `add` return that value,
+eliminating the need for a separate call to `next_new`.
+
+#### Eliminating the explicit need of `name_0`
+
+We realize that `name_0` is only used for module and prefix lookup, because the module names are stored
+in a binary tree, whose root is `name_0`. However, the only field of `name_0` used is `rlink`. We
+therefore introduce a new field `root` in `name_manager` for this purpose, and replace all references to
+`name_0()` in `name_manager` by `nullptr` and to `name_0().rlink()` by `root`. We need to take care that
+new `name_t` objects' `rlink` and `llink` are now initialized with `nullptr`. The only exceptions are
+the two return values from the lookup functions in case no module has been found. There we leave 
+`node_0` until we have refactored the token storage. We can now simplify the constructor of `name_t` by 
+removing the second parameter.
+

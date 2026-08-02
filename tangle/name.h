@@ -2,10 +2,13 @@
 
 #include <cstdint>
 
+#include <config.h>
+
 // TODO: Remove all of this once text_pointers are done properly 
 #include "pascal/range.h"
-constexpr size_t max_texts    = 2000;   /// number of replacement texts, must be < 10240
-using text_pointer_t  = pascal::int_range<0, max_texts>;
+
+
+using text_pointer_t  = pascal::int_range<0, config::max_texts>;
 using index_t         = uint32_t;  /// used to store indices in arrays
 
 class name_t;
@@ -29,8 +32,8 @@ class name_t
 {
     char8_t * _start;
     name_t *_link = nullptr;
-    name_t * _llink;
-    name_t * _rlink;
+    name_t * _llink = nullptr;
+    name_t * _rlink = nullptr;
 
     equiv_u _equiv = {};
     ilk_value _ilk   = normal;
@@ -41,9 +44,7 @@ class name_t
     { return *(this + 1); }
 
   public:
-    name_t (char8_t *start, name_t * name_0) 
-    : _start (start), _llink(name_0), _rlink(name_0) 
-    {}
+    explicit name_t (char8_t *start) : _start (start) {}
     
     auto constexpr length () const { return size_t (next ()._start - _start); }
     auto constexpr content () const -> std::u8string_view { return {_start, length ()}; }
