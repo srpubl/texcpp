@@ -35,12 +35,12 @@ public:
 
     constexpr auto &
     next_new () const
-    { return *names.rbegin (); }
+    { return names.back(); }
 
 private:
     constexpr auto &
     next_new ()
-    { return *names.rbegin (); }
+    { return names.back (); }
 
 public:
     name_t &
@@ -66,6 +66,5 @@ public:
 
     void
     remove_last () { names.pop_back(); }
-
 };
 

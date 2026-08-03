@@ -1,5 +1,8 @@
 #pragma once
 
+namespace util
+{
+
 template<typename T, T * (T::*Next) () const, void (T::*Set_Next)(T *)>
 class hash_bucket 
 {
@@ -11,7 +14,7 @@ public:
     template <typename Predicate>
     auto find (Predicate condition) -> T *
     {
-        auto p = start;
+        T *p = start;
 
         while (p)
         {
@@ -26,7 +29,7 @@ public:
     template <typename Function>
     auto for_each (Function &&apply) -> void
     {
-        auto p = start;
+        T *p = start;
         while (p)
         {
             apply (*p);
@@ -42,16 +45,18 @@ public:
 
     void remove (T &item)
     {
-        if (start == &item)
+        if (static_cast <T *>(start) == &item)
         {
             start = (item.*Next) ();
         }
         else
         {
-            auto q = start;
+            T *q = start;
             while ((q->*Next) () != &item) { q = (q->*Next) (); }
             (q->*Set_Next) ((item.*Next)());
         }
     }
 };
+
+}
 

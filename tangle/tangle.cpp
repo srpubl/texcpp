@@ -202,8 +202,6 @@ name_manager name_mgr;
 
 auto tok_mem = pascal::array<token_bank_t, pascal::array<token_pointer_t, ascii_code_t>> {};  /// tokens
 auto tok_start = pascal::array<text_pointer_t, index_t> {};  /// directory into tok mem
-auto link      = std::array<index_t, config::max_names> {};          /// hash table
-
 auto text_link = pascal::array<text_pointer_t, text_pointer_t> {};  /// relates replacement texts
 
 // section 39
@@ -579,7 +577,7 @@ get_output_impl ()
             a -= 024000;
             auto an = index_t {a};
             auto &name = name_mgr.name_at (a);
-            if (name.chop_link() != 0)
+            if (name.replacement_text() != 0)
             {
                 push_level (name);
             }

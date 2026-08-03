@@ -5,7 +5,7 @@
 
 #include "config.h"
 
-#include "hash_bucket.h"
+#include "utility/hash_bucket.h"
 #include "name.h"
 #include "name_storage.h"
 
@@ -15,8 +15,8 @@ using on_error_t      = void (*) ();
 using on_error_id_t   = void (*) (std::u8string_view id);
 using on_add_string_t = index_t (*) (std::u8string_view id);
 
-using hash_bucket_name_t_link = hash_bucket<name_t, &name_t::link, &name_t::set_link>;
-using hash_bucket_name_t_chop_link = hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;
+using hash_bucket_name_t_link = util::hash_bucket<name_t, &name_t::link, &name_t::set_link>;
+using hash_bucket_name_t_chop_link = util::hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;
 
 class name_manager
 {

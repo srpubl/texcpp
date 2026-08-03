@@ -386,3 +386,26 @@ the two return values from the lookup functions in case no module has been found
 `node_0` until we have refactored the token storage. We can now simplify the constructor of `name_t` by 
 removing the second parameter.
 
+### Shrinking `name_t`
+
+`name_t` uses a few pointers now, which will be 8 bytes each on modern machines. While 2 bytes is not
+enough, 4 bytes will be even for large documents. We can thus significantly reduce the size by using a
+32bit mode. However, that is not available for all platforms and not our preferred approach. We will
+use fancy pointers instead.
+
+To this end, we implement the template class `smallptr`, which is based on relative addresses, i.e., 
+offsets. An instance of `smallptr` knows its own address (`this`) and using a signed offset can refer
+to 2 GB above or below itself. This is useful if you can guarantee that memory is that close together.
+
+In our case, we can: `name_t` objects by definition all reside in the same contiguous memory space. As
+we can safely assume that we won't use that many names, we can use relative offsets. We just need to
+take care to never copy or move names out of the vector as then references might actually break. See,
+e.g., if a name is copied to a stack, which might be in a completely different location. Note that 
+this concept is different from using an index into a known array, as in that case we would always have
+to reference that array, either as an argument down the call stack or as a global variable.
+
+The implementation of `smallptr` takes care that when moving or copying the offset gets adjusted
+accordingly. We still have to take care though to not move or copy names out of the vector, nor can we
+use `smallptr <name_t>` outside of `name_t`, i.e., we use it only for storing names and references to
+names within `name_t`, not anywhere else.
+
