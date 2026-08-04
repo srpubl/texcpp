@@ -2,15 +2,15 @@
 
 #include <cstdint>
 
-#include <config.h>
+#include "config.h"
 
 // TODO: Remove all of this once text_pointers are done properly 
 #include "pascal/range.h"
 
 #include "utility/smallptr.h"
+#include "utility/string_record.h"
 
 using text_pointer_t  = pascal::int_range<0, config::max_texts>;
-using index_t         = uint32_t;  /// used to store indices in arrays
 
 enum ilk_value
 {
@@ -26,27 +26,18 @@ union equiv_u
     int32_t number;
 };
 
-class name_t
+class name_t : public util::string_record <char8_t, name_t>
 {
     using name_p = util::smallptr <name_t>;
 
-    char8_t * _start;
     name_p _llink     = nullptr;
     name_p _rlink     = nullptr;
 
     equiv_u _equiv = {};
     ilk_value _ilk   = normal;
 
-    // Safe, as we never hand out the last element to callers
-    constexpr auto &
-    next () const
-    { return *(this + 1); }
-
-  public:
-    explicit name_t (char8_t *start) : _start (start) {}
-
-    auto constexpr length ()           const    { return size_t (next ()._start - _start); }
-    auto constexpr content ()          const -> std::u8string_view { return {_start, length ()}; }
+public:
+    explicit name_t (auto *start) : util::string_record <char_type, name_t> (start) {}
     
     auto constexpr link ()             const -> name_t * { return _llink; }
     auto constexpr llink ()            const -> name_t * { return _llink; }

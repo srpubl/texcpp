@@ -409,3 +409,35 @@ accordingly. We still have to take care though to not move or copy names out of 
 use `smallptr <name_t>` outside of `name_t`, i.e., we use it only for storing names and references to
 names within `name_t`, not anywhere else.
 
+We introduce `name_p` as a shorthand for `smallptr <name_p>` and change `_llink`, `_rlink`, `_link` to
+it. We also move `_chop_link` from `equiv_u` for two reasons: If we didn't C++ wouldn't be able to 
+generate constructors and assignment operators automatically when we make it a `name_p`. We also want
+to merge it with `_rlink`. In the original tangle, `number`, `replacement_text`, and `chop_link` are
+using the same memory as well as `rlink` and `ilk`, and `llink` and `link`.
+
+After we move `_chop_link` as `name_p` to `name_t` and verify that it works, we remove it and bind the
+getter and setter to `_rlink`. Similarly, we remove `_link` and bind the respective getter and setter
+to `_llink`.
+
+## Token Management
+
+### Abstracting `name_storage` and `name_t`
+
+The token storage works similarly to the name storage. It is thus useful to reuse the code. We start by 
+renaming `name_storage` to `string_storage` and turning it into a template with two parameters for the
+types of the vectors we're using inside and adapt the whole template accordingly. The only issue is the
+two strings that we use in the exception, which we need to generalize as well. We use a helper template
+`descriptive_type_name` for this purpose that gets instantiated by the user of `string_storage` for each
+char and record type.
+
+We then take out `_start`, `next`, `length` and `content` from `name_t` and move them to a new class template
+`string_record` whose template argument is the char type we intend to use. We make `name_t` inherit from
+`string_record` and notice an important detail: `next` calculates the offset of the next `string_record` not
+`name_t`. As `string_record` is smaller this will crash. We thus need to tell `string_record` to actually
+use `name_t` here, which we pass as the second template parameter. We thus implement the curiously 
+recurring template pattern, as `name_t` now inherits from a template that gets `name_t` as its parameter.
+
+We use the opportunity to declare `char_type` in `string_record` such that we can use it in
+`string_storage`, thus eliminating the need for the first template parameter there.
+
+

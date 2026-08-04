@@ -192,7 +192,7 @@ name_manager::lookup_module (std::u8string_view module_name) -> name_t &
         
         default:
             if (on_incompatible) { on_incompatible (); }
-            return storage.name_0();
+            return storage.record_0();
         }        
     }
 
@@ -252,6 +252,6 @@ name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
         if (on_too_many_matches) { on_too_many_matches (); } 
     }
 
-    return result ? *result : storage.name_0();
+    return result ? *result : storage.record_0();
 }
 

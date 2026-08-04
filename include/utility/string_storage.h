@@ -1,0 +1,87 @@
+#pragma once
+
+#include <cstdint>
+#include <stdexcept>
+#include <string_view>
+#include <vector>
+
+namespace util
+{
+
+template <typename>
+inline constexpr char const * descriptive_type_name = ""; 
+
+template <typename Record_T, typename Index_T = uint32_t>
+class string_storage 
+{
+public:
+    using record_type = Record_T;
+    using char_type = record_type::char_type;
+    using string_view = std::basic_string_view <char_type>;
+    using index_t = Index_T;
+
+private:
+    std::vector <char_type> chars = {};
+    std::vector <record_type> records = {};
+
+public:
+    void
+    initialize (size_t max_chars, size_t max_records)
+    {
+        chars.clear ();
+        chars.reserve (max_chars + 1);
+
+        records.clear ();
+        records.reserve (max_records + 1);
+        records.resize (2, record_type {chars.data ()});  // one more to make record 0 of length 0
+    }
+
+    auto &
+    record_0 () { return *records.data(); }
+
+    // TODO: remove once not needed anymore
+    constexpr auto 
+    index_of (record_type const &record) const -> index_t
+    { return &record - records.data(); }
+
+    auto const &
+    record_at (index_t index) const
+    { return records[index]; }
+
+    constexpr auto &
+    next_new () const
+    { return records.back(); }
+
+private:
+    constexpr auto &
+    next_new ()
+    { return records.back (); }
+
+public:
+    record_type &
+    add (string_view id)
+    {
+        if (chars.size () + id.length () > chars.capacity ())
+            throw std::length_error (descriptive_type_name <char_type>);
+
+        if (records.size () > records.capacity () - 1)
+            throw std::length_error (descriptive_type_name <record_type>);
+
+        auto &new_record = next_new ();
+
+        chars.insert (chars.end (), id.begin (), id.end ());
+        records.emplace_back (chars.data () + chars.size ());
+
+        return new_record;
+    }
+
+    // The last record that has actually been used.
+    constexpr auto &
+    last () const { return record_at (records.size () - 2); }
+
+    void
+    remove_last () { records.pop_back(); }
+};
+
+}
+

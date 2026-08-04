@@ -6,10 +6,12 @@
 #include "config.h"
 
 #include "utility/hash_bucket.h"
+#include "utility/string_storage.h"
 #include "name.h"
-#include "name_storage.h"
 
 using namespace std::literals;
+
+using index_t = uint32_t;
 
 using on_error_t      = void (*) ();
 using on_error_id_t   = void (*) (std::u8string_view id);
@@ -18,9 +20,15 @@ using on_add_string_t = index_t (*) (std::u8string_view id);
 using hash_bucket_name_t_link = util::hash_bucket<name_t, &name_t::link, &name_t::set_link>;
 using hash_bucket_name_t_chop_link = util::hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;
 
+template <>
+inline constexpr char const * util::descriptive_type_name<name_t> = "name"; 
+
+template <>
+inline constexpr char const * util::descriptive_type_name<char8_t> = "byte memory"; 
+
 class name_manager
 {
-    name_storage storage;
+    util::string_storage <name_t> storage;
     std::array<hash_bucket_name_t_link, config::hash_size> hash_bucket = {};
     std::array<hash_bucket_name_t_chop_link, config::hash_size> chop_hash_bucket = {};
     name_t *root = nullptr;
@@ -70,7 +78,7 @@ public:
 
     auto const &
     name_at (index_t index) const
-    { return storage.name_at(index); }
+    { return storage.record_at(index); }
 
     constexpr auto
     index_of_next_new () const { return storage.index_of(storage.next_new ()); }
