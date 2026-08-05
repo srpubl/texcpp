@@ -57,15 +57,44 @@ private:
     next_new ()
     { return records.back (); }
 
+    constexpr void
+    check_size_of_chars (index_t count) const
+    {
+        if (chars.size () + count > chars.capacity ())
+            throw std::length_error (descriptive_type_name <char_type>);
+    }
+
+    constexpr void
+    check_size_of_records () const
+    {
+        if (records.size () > records.capacity () - 1)
+            throw std::length_error (descriptive_type_name <record_type>);
+    }
+
+
 public:
+    void
+    append_to_next_new (char_type c)
+    {
+        check_size_of_chars (1);
+        chars.push_back (c);
+    }
+
+    record_type &
+    add_next_new ()
+    {
+        check_size_of_records();
+
+        auto &new_record = next_new ();
+        records.emplace_back (chars.data () + chars.size ());
+        return new_record;
+    }
+
     record_type &
     add (string_view id)
     {
-        if (chars.size () + id.length () > chars.capacity ())
-            throw std::length_error (descriptive_type_name <char_type>);
-
-        if (records.size () > records.capacity () - 1)
-            throw std::length_error (descriptive_type_name <record_type>);
+        check_size_of_chars (id.length ());
+        check_size_of_records();
 
         auto &new_record = next_new ();
 
@@ -80,7 +109,12 @@ public:
     last () const { return record_at (records.size () - 2); }
 
     void
-    remove_last () { records.pop_back(); }
+    remove_last () 
+    { 
+        auto last_length = (++records.rbegin()) -> length();
+        records.pop_back ();
+        chars.resize (chars.size () - last_length); 
+    }
 };
 
 }

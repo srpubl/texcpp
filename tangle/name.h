@@ -2,15 +2,10 @@
 
 #include <cstdint>
 
-#include "config.h"
-
-// TODO: Remove all of this once text_pointers are done properly 
-#include "pascal/range.h"
-
 #include "utility/smallptr.h"
 #include "utility/string_record.h"
 
-using text_pointer_t  = pascal::int_range<0, config::max_texts>;
+#include "text.h"
 
 enum ilk_value
 {
@@ -22,7 +17,7 @@ enum ilk_value
 
 union equiv_u
 {
-    text_pointer_t repl_text;
+    text_t * repl_text;
     int32_t number;
 };
 
@@ -53,6 +48,6 @@ public:
     auto constexpr set_chop_link        (name_t * value) { this->_rlink = value; }
     auto constexpr set_ilk              (auto value)     { this->_ilk = value; }
     auto constexpr set_number           (auto value)     { this->_equiv.number = value + 0100000; }
-    auto constexpr set_replacement_text (auto value)     { this->_equiv.repl_text = value; }
+    auto constexpr set_replacement_text (text_t * value) { this->_equiv.repl_text = value; }
 };
 

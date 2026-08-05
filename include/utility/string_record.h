@@ -13,7 +13,7 @@ public:
     using string_view = std::basic_string_view <char_type>;
 
 private:
-    Char_T * _start;
+    Char_T const* _start;
 
     // Safe, as we never hand out the last element to callers
     constexpr auto &
@@ -21,10 +21,10 @@ private:
     { return *(static_cast<Derived const *>(this) + 1); }
 
   public:
-    explicit string_record (Char_T *start) : _start (start) {}
+    explicit string_record (Char_T const *start) : _start (start) {}
 
     auto constexpr length ()  const { return size_t (next ()._start - _start); }
-    auto constexpr content () const { return string_view {_start, length ()}; }    
+    auto constexpr content () const { return string_view {_start, length ()}; }
 };
 
 }

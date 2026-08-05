@@ -66,7 +66,7 @@ adapt the indices and write `send_out (str, {buffer.data(), n})`.
 
 We create the class first with all members public. `out_buf` becomes the first member called `buffer`. 
 We keep the original `out_buf` but make it of type `out_buffer`. We then replace all occurences of 
-`out_buf` by `out_buf.buffer`. As renaming doesn't work because of the dot, we use a trick: we rename 
+`out_buf` with `out_buf.buffer`. As renaming doesn't work because of the dot, we use a trick: we rename 
 `out_buf` to `out_buf_buffer` and then use text replacement on that name. C&T.
 
 We then do the same for all other new members: `break_index`, `semi_index`, `line`. After every member
@@ -135,13 +135,13 @@ bit more complicated as the function returns three possibilities: `consumed`, `r
 
 The only reason `reswitch` exists is because sometimes we need to peek at the next output token without 
 consuming it. Fortunately, we only need to look ahead one token. So we implement a simple 
-`put_back_output` that just stores one token. We adapt `get_output` by renaming it and writing a little 
-wrapper `get_output` around it that just checks whether there is an output token that was put back. We 
-need to take care to add an additional check to `send_the_output` as this loop needs to continue if 
+`put_back_output` that just stores one token. We adapt `get_output` with renaming it and writing a 
+little wrapper `get_output` around it that just checks whether there is an output token that was put back. 
+We need to take care to add an additional check to `send_the_output` as this loop needs to continue if 
 there is still a character that was put back. We also implement a little helper `peek_output`, which 
 will come in handy later.
 
-Now, we can replace all continue statements in our loop by `put_back_output(cur_char); return`. In 
+Now, we can replace all continue statements in our loop with `put_back_output(cur_char); return`. In 
 `send_output_constant`, we replace `return reswitch` with `put_back_output(cur_char); return consumed`. 
 Thus, we can move all cases from this function to our big switch. We now have no continue or break in 
 that big switch, so we can remove the outer while loop and replace all returns with breaks.
@@ -184,7 +184,7 @@ respective lines with `name_start.push_back`, and the one occasion of `--name_pt
 `name_start.pop_back()`. Similarly we replace `byte_mem` with a vector and remove `byte_ptr`. 
 
 We can now tackle the memory limitations and their workarounds. First, we need to increase the size of 
-an index to 32 bits. To avoid overflows we consequently replace all `uint16_t` by `index_t`, which we 
+an index to 32 bits. To avoid overflows we consequently replace all `uint16_t` with `index_t`, which we
 define as an alias to `uint32_t`. Then we set `ww` to 1 and increase `max_bytes` accordingly. We then 
 flatten `byte_mem` into a single `std::array` and adjust all references to it accordingly, simplifying 
 as much as possible.
@@ -209,7 +209,7 @@ set by
 
 We also need to make `id_first` a local variable, and then remove global `id_first` and `id_loc`. We 
 also remove `id_length` as this is covered by `current_id.length()`. We then replace references to 
-`current_id` by a parameter `id` except in `get_identifier` and `get_processed_string`. Because we 
+`current_id` with a parameter `id` except in `get_identifier` and `get_processed_string`. Because we 
 replace it in `id_lookup`, we have to add to 4 other functions that are part of the input system. We 
 have successfully removed `current_id` from the id handling system.
 
@@ -231,8 +231,8 @@ we leave the others to 0.
 
 #### `names` and `name_start`
 
-We then create a vector `names` with `name_t` elements, and replace `name_start` everywhere by `names`.
-Our constructor makes sure that this goes smoothly. The final goal will be to use indices as little as
+We then create a vector `names` with `name_t` elements, and replace `name_start` everywhere with `names`
+. Our constructor makes sure that this goes smoothly. The final goal will be to use indices as little as
 possible and to rely as much as possible directly on pointers. To see what this will mean, we look at
 `compute_name_location`: This function manages the linked lists inside each hash bucket. So far, the
 links in the linked list are indices into names. We change that now into pointers to the objects.
@@ -380,9 +380,9 @@ eliminating the need for a separate call to `next_new`.
 We realize that `name_0` is only used for module and prefix lookup, because the module names are stored
 in a binary tree, whose root is `name_0`. However, the only field of `name_0` used is `rlink`. We
 therefore introduce a new field `root` in `name_manager` for this purpose, and replace all references to
-`name_0()` in `name_manager` by `nullptr` and to `name_0().rlink()` by `root`. We need to take care that
-new `name_t` objects' `rlink` and `llink` are now initialized with `nullptr`. The only exceptions are
-the two return values from the lookup functions in case no module has been found. There we leave 
+`name_0()` in `name_manager` with `nullptr` and `name_0().rlink()` with `root`. We need to take care 
+that new `name_t` objects' `rlink` and `llink` are now initialized with `nullptr`. The only exceptions 
+are the two return values from the lookup functions in case no module has been found. There we leave 
 `node_0` until we have refactored the token storage. We can now simplify the constructor of `name_t` by 
 removing the second parameter.
 
@@ -390,7 +390,7 @@ removing the second parameter.
 
 `name_t` uses a few pointers now, which will be 8 bytes each on modern machines. While 2 bytes is not
 enough, 4 bytes will be even for large documents. We can thus significantly reduce the size by using a
-32bit mode. However, that is not available for all platforms and not our preferred approach. We will
+32-bit mode. However, that is not available for all platforms and not our preferred approach. We will
 use fancy pointers instead.
 
 To this end, we implement the template class `smallptr`, which is based on relative addresses, i.e., 
@@ -430,14 +430,36 @@ two strings that we use in the exception, which we need to generalize as well. W
 `descriptive_type_name` for this purpose that gets instantiated by the user of `string_storage` for each
 char and record type.
 
-We then take out `_start`, `next`, `length` and `content` from `name_t` and move them to a new class template
-`string_record` whose template argument is the char type we intend to use. We make `name_t` inherit from
-`string_record` and notice an important detail: `next` calculates the offset of the next `string_record` not
-`name_t`. As `string_record` is smaller this will crash. We thus need to tell `string_record` to actually
-use `name_t` here, which we pass as the second template parameter. We thus implement the curiously 
-recurring template pattern, as `name_t` now inherits from a template that gets `name_t` as its parameter.
+We then take out `_start`, `next`, `length` and `content` from `name_t` and move them to a new class 
+template `string_record` whose template argument is the char type we intend to use. We make `name_t` 
+inherit from `string_record` and notice an important detail: `next` calculates the offset of the next
+`string_record` not `name_t`. As `string_record` is smaller this will crash. We thus need to tell 
+`string_record` to actually use `name_t` here, which we pass as the second template parameter. We thus
+implement the curiously recurring template pattern, as `name_t` now inherits from a template that gets 
+`name_t` as its parameter.
 
 We use the opportunity to declare `char_type` in `string_record` such that we can use it in
 `string_storage`, thus eliminating the need for the first template parameter there.
 
+
+### Using `text_mgr` instead of `tok_mem` and `tok_start`
+
+We make `tok_mem` into a flat array, triple `max_toks`, make `tok_ptr` a scalar, remove `z` and `zo`, 
+and replace `zz` with `1_r`. C&T before we start a bigger change that needs to be done all at once
+because we replace indices with pointers. However, it is a very low-risk operation as everything falls
+nicely in place.  
+
+We replace all references to `tok_ptr`, which now corresponds to `text_mgr.storage.chars.size ()`, 
+and to `text_ptr`, which now corresponds to `text_mgr.storage.records.size ()`. In `store_two_bytes` and 
+`app_repl`, we notice a difference to the name storage: We can add tokens before the text is added, i.e.
+the construction is separate from the addition to the storage. We thus add two new methods 
+`append_to_next_new` and `add_next_new` to `string_storage` for this purpose.
+
+In most places, we replace index 0 with &text_mgr.storage.record_0(), which again acts like kind of a
+root node. We replace `module_flag` with `nullptr`. `text_link` becomes a member `_link` inside `text_t`
+along with a getter and a setter.
+
+In `out_state`, we merge `byte_field` and `end_field` into a `string_view bytes`, and similarly 
+`cur_byte` and `cur_end` get replaced by `cur_bytes`. Instead of `tok_mem [cur_byte++]` we now use the
+sequence: `cur_bytes[0]; cur_bytes.remove_prefix(1);`
 

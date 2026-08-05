@@ -65,7 +65,7 @@ public:
     lookup_prefix (std::u8string_view module_name) -> name_t &;
 
     void
-    add_simple (text_pointer_t replacement_text)
+    add_simple (text_t * replacement_text)
     {
         auto &new_name = storage.add(u8""sv);
         new_name.set_ilk(simple);

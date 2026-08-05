@@ -20,6 +20,7 @@
 #include "out_processor.h"
 #include "tangle.h"
 #include "terminal.h"
+#include "text_manager.h"
 
 #include "config.h"
 
@@ -190,19 +191,10 @@ print_error_location_output (terminal &term)
 // We use uint8_t and uint16_t instead of eight_bits and sixteen_bits
 // section 38
 
-auto constexpr zz     = 3_r;  /// we multiply the token capacity by approximately this amount
-
-using index_t         = uint32_t;  /// used to store indices in arrays
-using text_pointer_t  = pascal::int_range<0, config::max_texts>;
-using byte_pointer_t  = pascal::int_range<0, config::max_bytes>;
-using token_pointer_t = pascal::int_range<0, config::max_toks>;
-using token_bank_t    = pascal::int_range<0, zz - 1_r>;
+using index_t         = config::index_t;  /// used to store indices in arrays
 
 name_manager name_mgr;
-
-auto tok_mem = pascal::array<token_bank_t, pascal::array<token_pointer_t, ascii_code_t>> {};  /// tokens
-auto tok_start = pascal::array<text_pointer_t, index_t> {};  /// directory into tok mem
-auto text_link = pascal::array<text_pointer_t, text_pointer_t> {};  /// relates replacement texts
+text_manager text_mgr;
 
 // section 39
 // section 40
@@ -214,18 +206,11 @@ auto pool_check_sum = 271828;         /// sort of a hash for the whole string po
 // other initializers already given in section 40
 
 // section 44
-
-/// identifies a replacement text
-auto text_ptr = text_pointer_t {1};
-auto tok_ptr  = pascal::array<token_bank_t, token_pointer_t> {};  /// first unused position in tok_start
-auto z        = token_bank_t {1};                                 /// current segment of tok_mem
-
 // section 45, 46 not required
 // section 47
 // section 48
 // section 49
 // section 50
-using chopped_id_t = std::array<char8_t, config::unambig_length + 1>;
 
 auto double_chars     = buf_index_t {};
 auto current_id       = std::u8string_view {};
@@ -310,9 +295,7 @@ auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name
 // section 69
 // section 70
 
-/// final text_link in module replacement texts
-auto module_flag  = text_pointer_t {config::max_texts};
-auto last_unnamed = text_pointer_t {0};  /// most recent replacement text of unnamed module
+text_t *last_unnamed = &text_mgr.storage.record_0();  /// most recent replacement text of unnamed module
 
 // section 71 not required
 
@@ -336,13 +319,8 @@ constexpr auto join          = ascii_code_t {0177};  /// @& is the item concaten
 void
 store_two_bytes (uint16_t x)
 {
-    if (tok_ptr [z] + 2_r > config::max_toks)
-        err.overflow ("token");
-
-    tok_mem [z][tok_ptr [z]]       = x >> 8;
-    tok_mem [z][tok_ptr [z] + 1_r] = x & 0xFF;
-
-    tok_ptr [z] += 2_r;
+    text_mgr.storage.append_to_next_new (x >> 8);
+    text_mgr.storage.append_to_next_new (x & 0xFF);
 }
 
 // section 74, 75, 76 implement print_repl for debug mode if that gets included
@@ -353,10 +331,9 @@ using mod_pointer_t = pascal::int_range<0, config::max_modules>;
 
 struct output_state
 {
-    index_t        end_field;   /// ending location of replacement text
-    index_t        byte_field;  /// present location within replacement text
-    name_t const * name_field;  /// byte_start index for text being output
-    text_pointer_t repl_field;  /// tok_start index for text being output
+    text_manager::string_view bytes;
+    name_t const * name_field; 
+    text_t const * repl_field;
     mod_pointer_t  mod_field;   /// module number or zero if not a module
 };
 
@@ -365,8 +342,7 @@ struct output_state
 /// current output state
 auto  cur_state = output_state {};
 
-auto &cur_end   = cur_state.end_field;   /// current ending location in tok mem
-auto &cur_byte  = cur_state.byte_field;  /// location of next output byte in tok mem
+auto &cur_bytes = cur_state.bytes;
 auto &cur_name  = cur_state.name_field;  /// pointer to current name being expanded
 auto &cur_repl  = cur_state.repl_field;  /// pointer to current replacement text
 auto &cur_mod   = cur_state.mod_field;   /// current module number being expanded
@@ -375,9 +351,6 @@ auto  stack     = pascal::int_range_array<1, config::stack_size, output_state> {
 auto  stack_ptr = pascal::int_range<0, config::stack_size> {};
 
 /// section 80
-
-auto zo = token_bank_t {};
-
 // section 81 nothing tbd
 // section 82
 
@@ -391,21 +364,8 @@ initialize_output_stacks ()
     stack_ptr   = 1_r;
     brace_level = 0_r;
     cur_name    = nullptr;
-    cur_repl    = text_pointer_t {text_link [0_r]};
-
-    if (cur_repl == module_flag)
-    {
-        zo       = 0_r;
-        cur_byte = 0;
-        cur_end  = 0;
-    }
-    else
-    {
-        zo       = cur_repl % zz;
-        cur_byte = tok_start [cur_repl];
-        cur_end  = tok_start [cur_repl + zz];
-    }
-
+    cur_repl    = text_mgr.storage.record_0().link ();
+    cur_bytes   = cur_repl ? cur_repl->content() : text_manager::string_view {};
     cur_mod = 0_r;
 }
 
@@ -421,22 +381,7 @@ push_level (name_t const &name)
     stack [stack_ptr++] = cur_state;
     cur_name            = &name;
     cur_repl            = name.replacement_text ();
-    zo                  = cur_repl % zz;
-    cur_byte            = tok_start [cur_repl];
-    cur_end             = tok_start [cur_repl + zz];
-
-    if (cur_repl == module_flag)
-    {
-        zo       = 0_r;
-        cur_byte = 0;
-        cur_end  = 0;
-    }
-    else
-    {
-        zo       = cur_repl % zz;
-        cur_byte = tok_start [cur_repl];
-        cur_end  = tok_start [cur_repl + zz];
-    }
+    cur_bytes   = cur_repl ? cur_repl->content() : text_manager::string_view {};
 
     cur_mod = 0_r;
 }
@@ -450,27 +395,24 @@ pop_parameter_stack ();
 void
 pop_level ()
 {
-    auto repl = text_pointer_t {text_link [cur_repl]};
-    if (repl == 0)  // end of macro expansion
+    auto repl = cur_repl -> link ();
+    if (repl == &text_mgr.storage.record_0())  // end of macro expansion
     {
         if (cur_name->ilk() == parametric)
         {
             pop_parameter_stack ();
         }
     }
-    else if (repl < module_flag)  // link to a continuation
+    else if (repl)  // link to a continuation
     {
         cur_repl = repl;  // stay on same level
-        zo       = cur_repl % zz;
-        cur_byte = tok_start [cur_repl];
-        cur_end  = tok_start [cur_repl + zz];
+        cur_bytes = cur_repl->content();
         return;
     }
 
     if (--stack_ptr > 0)  // go down to previous level
     {
         cur_state = stack [stack_ptr];
-        zo        = cur_repl % zz;
     }
 }
 
@@ -496,7 +438,7 @@ get_output_impl ()
         if (stack_ptr == 0)
             return 0;
 
-        if (cur_byte == cur_end)
+        if (cur_bytes.empty())
         {
             cur_val = -cur_mod;
             pop_level ();
@@ -506,7 +448,7 @@ get_output_impl ()
             return module_number;
         }
 
-        uint16_t a = tok_mem [zo][token_pointer_t {cur_byte++}];
+        uint16_t a = cur_bytes[0]; cur_bytes.remove_prefix(1);
 
         if (a < 0200)  // one-byte token
         {
@@ -519,7 +461,7 @@ get_output_impl ()
             continue;
         }
 
-        a = (a - 0200) << 8 | tok_mem [zo][token_pointer_t {cur_byte++}];
+        a = (a - 0200) << 8 | cur_bytes[0]; cur_bytes.remove_prefix(1);
 
         if (a < 024000)  // (0250 - 0200) * 0400
         {
@@ -540,9 +482,9 @@ get_output_impl ()
             {
                 // section 90
 
-                while (cur_byte == cur_end && stack_ptr > 0) { pop_level (); }
+                while (cur_bytes.empty () && stack_ptr > 0) { pop_level (); }
 
-                if (stack_ptr == 0 || tok_mem [zo][token_pointer_t {cur_byte}] != u8'(')
+                if (stack_ptr == 0 || cur_bytes [0] != u8'(')
                 {
                     err.terminal ().print_nl ("! No parameter given for ");
                     print (err.terminal (), name.content ());
@@ -552,15 +494,9 @@ get_output_impl ()
 
                 copy_parameter_to_tok_mem ();
 
-                name_mgr.add_simple (text_ptr);
-
-                if (text_ptr > config::max_texts - zz)
-                    err.overflow ("text");
-
-                text_link [text_ptr]      = 0_r;
-                tok_start [text_ptr + zz] = tok_ptr [z];
-                ++text_ptr;
-                z = text_ptr % zz;
+                auto &new_text = text_mgr.storage.add_next_new ();
+                new_text.set_link(&text_mgr.storage.record_0());
+                name_mgr.add_simple (&new_text);
 
                 push_level (name);
                 continue;
@@ -629,9 +565,7 @@ void
 pop_parameter_stack ()
 {
     name_mgr.remove_last();
-    --text_ptr;
-    z           = text_ptr % zz;
-    tok_ptr [z] = token_pointer_t {tok_start [text_ptr]};
+    text_mgr.storage.remove_last();
 }
 
 // section 93
@@ -640,12 +574,7 @@ pop_parameter_stack ()
 void
 app_repl (uint8_t b)
 {
-    auto first_free = tok_ptr [z];
-    if (first_free == config::max_toks)
-        err.overflow ("token");
-
-    tok_mem [z][first_free] = b;
-    tok_ptr [z]             = first_free + 1_r;
+    text_mgr.storage.append_to_next_new (b);
 }
 
 /// .
@@ -653,10 +582,10 @@ void
 copy_parameter_to_tok_mem ()
 {
     int balance = 1;  /// excess of ( versus ) while copying a parameter
-    ++cur_byte;
+    cur_bytes.remove_prefix(1);
     while (true)
     {
-        uint8_t b = tok_mem [zo][token_pointer_t {cur_byte++}];
+        uint8_t b = cur_bytes[0]; cur_bytes.remove_prefix(1);
         if (b == param)
         {
             store_two_bytes (name_mgr.index_of_next_new() + 077777);
@@ -666,7 +595,7 @@ copy_parameter_to_tok_mem ()
             if (b >= 0200)
             {
                 app_repl (b);
-                b = tok_mem [zo][token_pointer_t {cur_byte++}];
+                b = cur_bytes[0]; cur_bytes.remove_prefix(1);
             }
             else
             {
@@ -683,7 +612,7 @@ copy_parameter_to_tok_mem ()
                     do
                     {
                         app_repl (b);
-                        b = tok_mem [zo][token_pointer_t {cur_byte++}];
+                        b = cur_bytes[0]; cur_bytes.remove_prefix(1);
                     }
                     while (b != u8'\'');  // copy string, don't change balance
                     break;
@@ -758,7 +687,7 @@ send_the_output ();
 void
 output_compressed_tables (terminal &term)
 {
-    if (text_link [0_r] == 0_r)
+    if (!text_mgr.storage.record_0().link())
     {
         err.terminal ().print_nl ("! No output was specified.");
         err.mark_harmless ();
@@ -1985,7 +1914,7 @@ scan_numeric ()
 // section 164
 
 /// replacement text formed by scan_repl
-auto cur_repl_text = text_pointer_t {};
+text_t * cur_repl_text = &text_mgr.storage.record_0();
 
 // section 165, 167
 
@@ -2078,20 +2007,8 @@ scan_repl (uint8_t type)
 
     next_control = a & 0xFF;
     ensure_parantheses_balance (balance);
-    if (text_ptr > config::max_texts - zz)
-        err.overflow ("text");
 
-    cur_repl_text             = text_ptr;
-    tok_start [text_ptr + zz] = tok_ptr [z];
-    ++text_ptr;
-    if (z == zz - 1)
-    {
-        z = 0_r;
-    }
-    else
-    {
-        ++z;
-    }
+    cur_repl_text = &text_mgr.storage.add_next_new ();
 }
 
 // section 166
@@ -2210,7 +2127,7 @@ define_macro (ilk_value type)
     auto &name = name_mgr.lookup (type, current_id);
     scan_repl (type);
     name.set_replacement_text (cur_repl_text);
-    text_link [cur_repl_text] = 0_r;
+    cur_repl_text->set_link(&text_mgr.storage.record_0());
 }
 
 // section 171 nothing tbd
@@ -2328,10 +2245,10 @@ scan_pascal_part ()
     store_two_bytes (0150000 + module_count);  // 01500000 = 0320 * 0400
     scan_repl (module_name);                   // now cur_repl_text points to the replacement text
 
-    if (p == nullptr)  // unnamed module
+    if (!p)  // unnamed module
     {
-        text_link [last_unnamed] = cur_repl_text;
-        last_unnamed             = cur_repl_text;
+        last_unnamed->set_link(cur_repl_text);
+        last_unnamed = cur_repl_text;
     }
     else if (p -> replacement_text() == 0)  // first module of this name
     {
@@ -2339,15 +2256,15 @@ scan_pascal_part ()
     }
     else
     {
-        text_pointer_t t = p -> replacement_text();
-        while (text_link [t] < module_flag)  // find end of list
+        auto t = p -> replacement_text();
+        while (t->link())  // find end of list
         {
-            t = text_link [t];
+            t = t->link();
         }
-        text_link [t] = cur_repl_text;
+        t->set_link(cur_repl_text);
     }
 
-    text_link [cur_repl_text] = module_flag;  // mark this replacement text as nonmacro
+    cur_repl_text -> set_link(nullptr);  // mark this replacement text as nonmacro
 }
 
 // section 179, 180, 181: debugging, left out for now
@@ -2367,22 +2284,17 @@ initialize ()
 
     // section 42
     name_mgr.initialize(config::max_bytes, config::max_names);
+    text_mgr.initialize(config::max_toks, config::max_texts);
 
     string_ptr     = 256_r;
     pool_check_sum = 271828;
 
     // section 46
-    std::fill (tok_start.begin (), tok_start.begin () + zz + 1, 0);  // one more to make replacement text
-                                                                     // 0 of length 0
-    std::fill (tok_ptr.begin (), tok_ptr.end (), 0_r);
-    text_ptr = 1_r;
-    z        = 1_r;
-
     // section 48
     // section 52
     // section 71
-    last_unnamed    = 0_r;
-    text_link [0_r] = 0_r;
+    last_unnamed    = &text_mgr.storage.record_0();
+    text_mgr.storage.record_0().set_link(&text_mgr.storage.record_0());
 
     // section 144
     scanning_hex = false;
