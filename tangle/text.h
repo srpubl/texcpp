@@ -1,10 +1,11 @@
 #pragma once
 
+#include "utility/smallptr.h"
 #include "utility/string_record.h"
 
 class text_t : public util::string_record <char32_t, text_t>
 {
-    text_t * _link = nullptr;
+    util::smallptr <text_t> _link = nullptr;
 
 public:
     explicit text_t (char32_t const *start) : util::string_record <char_type, text_t> (start) {}

@@ -80,9 +80,6 @@ public:
     name_at (index_t index) const
     { return storage.record_at(index); }
 
-    constexpr auto
-    index_of_next_new () const { return storage.index_of(storage.next_new ()); }
-
     constexpr auto &
     last () const { return storage.last (); }
 

@@ -302,16 +302,16 @@ text_t *last_unnamed = &text_mgr.storage.record_0();  /// most recent replacemen
 // section 72
 
 /// insertion of parameter
-constexpr auto param         = ascii_code_t {0};
-constexpr auto verbatim      = ascii_code_t {2};     /// @= begins a verbatim Pascal string, @> ends it
-constexpr auto force_line    = ascii_code_t {3};     /// @\ forces a new line in the Pascal output
-constexpr auto begin_comment = ascii_code_t {011};   /// @{ turns into { or [. in output
-constexpr auto end_comment   = ascii_code_t {012};   /// @} turns into } or .] in output
-constexpr auto octal         = ascii_code_t {014};   /// @' precedes an octal constant
-constexpr auto hex           = ascii_code_t {015};   /// @" preceds a hex constant
-constexpr auto double_dot    = ascii_code_t {040};   /// denotes .. in Pascal
-constexpr auto check_sum     = ascii_code_t {0175};  /// @$ denotes the string pool check sum
-constexpr auto join          = ascii_code_t {0177};  /// @& is the item concatenation operator
+constexpr auto param         = ascii_code_t {0x00};
+constexpr auto verbatim      = ascii_code_t {0x02};     /// @= begins a verbatim Pascal string, @> ends it
+constexpr auto force_line    = ascii_code_t {0x03};     /// @\ forces a new line in the Pascal output
+constexpr auto begin_comment = ascii_code_t {0x09};   /// @{ turns into { or [. in output
+constexpr auto end_comment   = ascii_code_t {0x0A};   /// @} turns into } or .] in output
+constexpr auto octal         = ascii_code_t {0x0C};   /// @' precedes an octal constant
+constexpr auto hex           = ascii_code_t {0x0D};   /// @" preceds a hex constant
+constexpr auto double_dot    = ascii_code_t {0x20};   /// denotes .. in Pascal
+constexpr auto check_sum     = ascii_code_t {0x7D};  /// @$ denotes the string pool check sum
+constexpr auto join          = ascii_code_t {0x7F};  /// @& is the item concatenation operator
 
 // section 73
 
@@ -319,8 +319,8 @@ constexpr auto join          = ascii_code_t {0177};  /// @& is the item concaten
 void
 store_two_bytes (uint16_t x)
 {
-    text_mgr.storage.append_to_next_new (x >> 8);
-    text_mgr.storage.append_to_next_new (x & 0xFF);
+    text_mgr.append_to_next_new (x >> 8);
+    text_mgr.append_to_next_new (x & 0xFF);
 }
 
 // section 74, 75, 76 implement print_repl for debug mode if that gets included
@@ -391,7 +391,6 @@ push_level (name_t const &name)
 void
 pop_parameter_stack ();
 
-/// do this when cur_byte reaches cur_end
 void
 pop_level ()
 {
@@ -418,19 +417,19 @@ pop_level ()
 
 // section 86
 
-constexpr auto number        = 0200;  /// code returned by get output when next output is numeric
-constexpr auto module_number = 0201;  ///  code returned by get output for module numbers
-constexpr auto identifier    = 0202;  /// code returned by get output for identifiers
+constexpr auto number        = 0x80;  /// code returned by get output when next output is numeric
+constexpr auto module_number = 0x81;  ///  code returned by get output for module numbers
+constexpr auto identifier    = 0x82;  /// code returned by get output for identifiers
 
 int            cur_val;  /// additional information corresponding to output token
 
 // section 87, 88, 89, 90, 92
 
 void
-copy_parameter_to_tok_mem ();
+copy_parameter_to_text_mgr (text_manager::string_view &str);
 
 /// returns next token after macro expansion
-uint16_t
+char32_t
 get_output_impl ()
 {
     while (true)  // because we need to restart once in a while
@@ -448,9 +447,9 @@ get_output_impl ()
             return module_number;
         }
 
-        uint16_t a = cur_bytes[0]; cur_bytes.remove_prefix(1);
+        auto a = cur_bytes[0]; cur_bytes.remove_prefix(1);
 
-        if (a < 0200)  // one-byte token
+        if (a < 0x80)  // one-byte token
         {
             if (a != param)
                 return a;
@@ -461,18 +460,18 @@ get_output_impl ()
             continue;
         }
 
-        a = (a - 0200) << 8 | cur_bytes[0]; cur_bytes.remove_prefix(1);
+        a = a << 8 | cur_bytes[0]; cur_bytes.remove_prefix(1);
 
-        if (a < 024000)  // (0250 - 0200) * 0400
+        if (a < 0xA800)
         {
-            auto an = index_t {a};
+            a -= 0x8000;
             auto &name = name_mgr.name_at(a);
 
             // section 89
 
             switch (name.ilk ())
             {
-            case normal : cur_val = an; return identifier;
+            case normal : cur_val = a; return identifier;
 
             case numeric: cur_val = name.number (); return number;
 
@@ -492,7 +491,7 @@ get_output_impl ()
                     continue;
                 }
 
-                copy_parameter_to_tok_mem ();
+                copy_parameter_to_text_mgr (cur_bytes);
 
                 auto &new_text = text_mgr.storage.add_next_new ();
                 new_text.set_link(&text_mgr.storage.record_0());
@@ -506,18 +505,17 @@ get_output_impl ()
             }
         }
 
-        if (a < 050000)
+        if (a < 0xD000)
         {
             // section 88
 
-            a -= 024000;
-            auto an = index_t {a};
+            a -= 0xA800;
             auto &name = name_mgr.name_at (a);
             if (name.replacement_text() != 0)
             {
                 push_level (name);
             }
-            else if (an != 0)
+            else if (a != 0)
             {
                 err.terminal ().print_nl ("! Not present: <");
                 print (err.terminal (), name.content());
@@ -527,7 +525,7 @@ get_output_impl ()
             continue;
         }
 
-        cur_val = a - 050000;
+        cur_val = a - 0xD000;
         a       = module_number;
         cur_mod = mod_pointer_t {cur_val};
         return a;
@@ -568,58 +566,56 @@ pop_parameter_stack ()
     text_mgr.storage.remove_last();
 }
 
-// section 93
-
-/// append replacement text
+// section 93 .
 void
-app_repl (uint8_t b)
-{
-    text_mgr.storage.append_to_next_new (b);
-}
-
-/// .
-void
-copy_parameter_to_tok_mem ()
+copy_parameter_to_text_mgr (text_manager::string_view &str)
 {
     int balance = 1;  /// excess of ( versus ) while copying a parameter
-    cur_bytes.remove_prefix(1);
-    while (true)
+    str.remove_prefix (1);  // opening (
+    while (balance > 0)
     {
-        uint8_t b = cur_bytes[0]; cur_bytes.remove_prefix(1);
-        if (b == param)
+        auto b = str [0];
+        if (b >= 0x80)
         {
-            store_two_bytes (name_mgr.index_of_next_new() + 077777);
+            store_two_bytes (b << 8 | str [1]); 
+            str.remove_prefix (2);
+            continue;
         }
-        else
+
+        switch (b)
         {
-            if (b >= 0200)
-            {
-                app_repl (b);
-                b = cur_bytes[0]; cur_bytes.remove_prefix(1);
-            }
-            else
-            {
-                switch (b)
-                {
-                case u8'(': ++balance; break;
+        case U'(': 
+            ++balance; 
+            str.remove_prefix (1);
+            text_mgr.append_to_next_new (b);
+            break;
 
-                case u8')':
-                    if (--balance == 0)
-                        return;
-                    break;
+        case U')':
+            str.remove_prefix (1);
+            if (--balance == 0)
+                break;
 
-                case u8'\'':
-                    do
-                    {
-                        app_repl (b);
-                        b = cur_bytes[0]; cur_bytes.remove_prefix(1);
-                    }
-                    while (b != u8'\'');  // copy string, don't change balance
-                    break;
-                }
-            }
-            app_repl (b);
+            text_mgr.append_to_next_new (b);
+            break;
+
+        case U'\'':
+        {
+            auto slice = str.substr (0, str.find(U'\'', 1) + 1);   
+            text_mgr.append_to_next_new (slice);                    
+            str.remove_prefix (slice.size());
+            break;  
         }
+
+        case param:
+            str.remove_prefix (1);
+            store_two_bytes (0x8000 + name_mgr.index_of (name_mgr.last ()));
+            break;
+
+        default:
+            str.remove_prefix (1);
+            text_mgr.append_to_next_new (b);
+            break;
+        }            
     }
 }
 
@@ -800,7 +796,7 @@ send_output_one_char ()
         break;
 
         DEF_26_CASES_FROM (u8'a')
-        cur_char -= 040;
+        cur_char -= 0x20;
         out_proc.process_identifier ({&cur_char, 1});
         break;
 
@@ -863,7 +859,7 @@ send_output_identifier ()
     {
         if (ch != u8'_')
         {
-            buffer [k++] = ch >= u8'a' ? ch - 040 : ch;
+            buffer [k++] = ch >= u8'a' ? ch - 0x20 : ch;
         }
 
         if (k == buffer.size ())
@@ -1343,12 +1339,12 @@ check_read_all_changes ()
 
 /// control code of no interest to TANGLE
 constexpr auto ignore       = ascii_code_t {0};
-constexpr auto control_text = ascii_code_t {0203};  /// control code for ‘@t’, ‘@^’, etc.
-constexpr auto format       = ascii_code_t {0204};  /// control code for ‘@f’
-constexpr auto definition   = ascii_code_t {0205};  /// control code for ‘@d’
-constexpr auto begin_pascal = ascii_code_t {0206};  /// control code for ‘@p’
-constexpr auto module_name  = ascii_code_t {0207};  /// control code for ‘@<’
-constexpr auto new_module   = ascii_code_t {0210};  /// control code for ‘@ ’ and ‘@*’
+constexpr auto control_text = ascii_code_t {0x83};  /// control code for ‘@t’, ‘@^’, etc.
+constexpr auto format       = ascii_code_t {0x84};  /// control code for ‘@f’
+constexpr auto definition   = ascii_code_t {0x85};  /// control code for ‘@d’
+constexpr auto begin_pascal = ascii_code_t {0x86};  /// control code for ‘@p’
+constexpr auto module_name  = ascii_code_t {0x87};  /// control code for ‘@<’
+constexpr auto new_module   = ascii_code_t {0x88};  /// control code for ‘@ ’ and ‘@*’
 
 // Declared in module 171 what needed here already
 mod_pointer_t module_count;
@@ -1902,7 +1898,7 @@ scan_numeric ()
     }
     while (state != scan_numeric_cases::done);
 
-    if (std::abs (accumulator) >= 0100000)
+    if (std::abs (accumulator) >= 0x8000)
     {
         err.err_print ("! Value too big: ", accumulator);
         accumulator = 0;
@@ -1919,9 +1915,9 @@ text_t * cur_repl_text = &text_mgr.storage.record_0();
 // section 165, 167
 
 void
-copy_string_from_buffer_to_tok_mem ();
+copy_string_from_buffer_to_text_mgr ();
 void
-copy_verbatim_from_buffer_to_tok_mem ();
+copy_verbatim_from_buffer_to_text_mgr ();
 void
 ensure_parantheses_balance (int &balance);
 
@@ -1939,7 +1935,10 @@ scan_repl (uint8_t type)
 
         switch (a)
         {
-        case u8'(': ++balance; break;
+        case u8'(': 
+            ++balance; 
+            text_mgr.append_to_next_new (a);
+            break;
 
         case u8')':
             if (balance == 0)
@@ -1950,37 +1949,40 @@ scan_repl (uint8_t type)
             {
                 --balance;
             }
+            text_mgr.append_to_next_new (a);
             break;
 
-        case u8'\'': copy_string_from_buffer_to_tok_mem (); break;
+        case u8'\'': 
+            copy_string_from_buffer_to_text_mgr (); 
+            break;
 
         case u8'#':
             if (type == parametric)
             {
                 a = param;
             }
+            text_mgr.append_to_next_new (a);
             break;
 
         case identifier:
         {
             auto &name = name_mgr.lookup (normal, current_id);
-            a = name_mgr.index_of (name);
-            app_repl (0200 + (a >> 8));
-            a &= 0xFF;
+            store_two_bytes (0x8000 + name_mgr.index_of (name));
             break;
         }
 
         case module_name:
             if (type == module_name)
             {
-                app_repl (0250 + (name_mgr.index_of (*cur_module) >> 8));
-                a = name_mgr.index_of (*cur_module) & 0xFF;
+                store_two_bytes(0xA800 + name_mgr.index_of (*cur_module));
                 break;
             }
             done = true;
             break;
 
-        case verbatim: copy_verbatim_from_buffer_to_tok_mem (); break;
+        case verbatim: 
+            copy_verbatim_from_buffer_to_text_mgr (); 
+            break;
 
         case definition:
         case format:
@@ -1996,11 +1998,10 @@ scan_repl (uint8_t type)
             break;
 
         case new_module: done = true; break;
-        }
-
-        if (!done)
-        {
-            app_repl (a & 0xFF);  // store a in tok_mem
+        
+        default:
+            text_mgr.append_to_next_new (a & 0xFF);
+            break;
         }
     }
     while (!done);
@@ -2030,7 +2031,7 @@ ensure_parantheses_balance (int &balance)
 
     while (balance > 0)
     {
-        app_repl (u8')');
+        text_mgr.append_to_next_new (U')');
         --balance;
     }
 }
@@ -2038,13 +2039,13 @@ ensure_parantheses_balance (int &balance)
 // section 168
 
 void
-copy_string_from_buffer_to_tok_mem ()
+copy_string_from_buffer_to_text_mgr ()
 {
-    ascii_code_t b = u8'\'';
+    char8_t b = u8'\'';
 
     while (true)
     {
-        app_repl (b);
+        text_mgr.append_to_next_new (static_cast<text_manager::char_type>(b));
         if (b == u8'@')
         {
             if (buffer [loc] == u8'@')
@@ -2071,17 +2072,18 @@ copy_string_from_buffer_to_tok_mem ()
                 break;
 
             ++loc;
-            app_repl (u8'\'');
+            text_mgr.append_to_next_new (u8'\'');
         }
     }
+    text_mgr.append_to_next_new (u8'\'');
 }
 
 // section 169
 
 void
-copy_verbatim_from_buffer_to_tok_mem ()
+copy_verbatim_from_buffer_to_text_mgr ()
 {
-    app_repl (verbatim);
+    text_mgr.append_to_next_new (verbatim);
     buffer [limit + 1_r] = u8'@';
 
     while (true)
@@ -2092,7 +2094,7 @@ copy_verbatim_from_buffer_to_tok_mem ()
             {
                 if (buffer [loc + 1_r] == u8'@')
                 {
-                    app_repl (u8'@');
+                    text_mgr.append_to_next_new (U'@');
                     loc += 2_r;
                     continue;
                 }
@@ -2100,7 +2102,7 @@ copy_verbatim_from_buffer_to_tok_mem ()
         }
         else
         {
-            app_repl (buffer [loc++]);
+            text_mgr.append_to_next_new (static_cast<text_manager::char_type> (buffer [loc++]));
             continue;
         }
 
@@ -2117,6 +2119,8 @@ copy_verbatim_from_buffer_to_tok_mem ()
     }
 
     loc += 2_r;
+    text_mgr.append_to_next_new (verbatim);
+
 }
 
 // section 170
@@ -2242,7 +2246,7 @@ scan_pascal_part ()
     }
 
     // Insert module number into tok_mem
-    store_two_bytes (0150000 + module_count);  // 01500000 = 0320 * 0400
+    store_two_bytes (0xD000 + module_count);
     scan_repl (module_name);                   // now cur_repl_text points to the replacement text
 
     if (!p)  // unnamed module

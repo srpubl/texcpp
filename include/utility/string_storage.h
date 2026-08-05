@@ -80,6 +80,13 @@ public:
         chars.push_back (c);
     }
 
+    void
+    append_to_next_new (string_view str)
+    {
+        check_size_of_chars (str.length ());
+        chars.insert (chars.end (), str.begin (), str.end ());
+    }
+
     record_type &
     add_next_new ()
     {

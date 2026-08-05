@@ -463,3 +463,28 @@ In `out_state`, we merge `byte_field` and `end_field` into a `string_view bytes`
 `cur_byte` and `cur_end` get replaced by `cur_bytes`. Instead of `tok_mem [cur_byte++]` we now use the
 sequence: `cur_bytes[0]; cur_bytes.remove_prefix(1);`
 
+### Streamlining token handling
+
+There are 4 kinds of tokens. ASCII tokens are stored as single byte, all others stored as big-endian 
+two bytes, i.e. in the range 0x8000 to 0xFFFF.
+
+* token < 0x80: ASCII code
+* 0x8000 <= token < 0xA800: Identifiers (with index = value - 0x8000)
+* 0xA800 <= token < 0xD000: Identifier but replace with replacement text (index = value - 0xA800)
+* 0xD000 <= token: Module (module number = value - 0xD000)
+
+Since handling bits is somewhat easier with hexadecimal numbers we convert all numbers in the code into 
+hexadecimal. We then make the token switching in `get_output_impl` a bit more explicit such that the 
+cases do not depend on each other.
+
+Conversely, we make the storing more explicit as well. The two places where we use `store_two_bytes` 
+already get streamlined. In the switch inside `scan_repl`, we move the appending of `a` into every
+case because we will be able to use `store_two_bytes` more often. We need to explicity add a default
+case to append `a`. Massaging this a bit further we end up with all double-byte tokens being explicitly
+appended via `store_two_bytes`.
+
+We also move the appending of the last character from `scan_repl` to 
+`copy_string_from_buffer_to_text_mgr` and `copy_verbatim_from_buffer_to_text_mgr`. Right now we cannot
+continue much further without converting `buffer` into string_view on top of a vector.
+
+

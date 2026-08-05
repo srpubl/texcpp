@@ -13,6 +13,7 @@ class text_manager
 {
 public:
     using storage_type = util::string_storage <text_t>;
+    using char_type = storage_type::char_type;
     using string_view = storage_type::string_view; 
 
 public:
@@ -21,4 +22,17 @@ public:
 public:
     void
     initialize (size_t max_tokens, size_t max_texts);
+
+    void
+    append_to_next_new (char_type b)
+    {
+        storage.append_to_next_new (b);
+    }
+
+    void
+    append_to_next_new (string_view b)
+    {
+        storage.append_to_next_new (b);
+    }
+
 };
