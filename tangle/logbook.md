@@ -487,4 +487,12 @@ We also move the appending of the last character from `scan_repl` to
 `copy_string_from_buffer_to_text_mgr` and `copy_verbatim_from_buffer_to_text_mgr`. Right now we cannot
 continue much further without converting `buffer` into string_view on top of a vector.
 
+### Eliminating double-byte tokens
+
+The elimination is very simple: `store_two_bytes` gets replaced by `text_mgr.append_to_next_new`, and 
+the double-byte handling in `get_output_impl` and `copy_parameter_to_text_mgr` removed. This then allows
+for further simplifications of logic.
+
+We also remove `cur_repl_text` as this is just the (new) return value from `scan_repl` used locally
+after a call to that function.  
 

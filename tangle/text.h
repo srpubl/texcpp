@@ -5,12 +5,20 @@
 
 class text_t : public util::string_record <char32_t, text_t>
 {
-    util::smallptr <text_t> _link = nullptr;
+    util::smallptr <text_t> _continuation = nullptr;
 
 public:
     explicit text_t (char32_t const *start) : util::string_record <char_type, text_t> (start) {}
 
-    auto constexpr link ()  const -> text_t * { return _link; }
-    auto constexpr set_link (text_t * value) { this->_link = value; }
+    auto constexpr continuation ()  const -> text_t * { return _continuation; }
+    auto constexpr set_continuation (text_t * value) { this->_continuation = value; }
+
+    auto constexpr
+    append_continuation (text_t & value)
+    {
+        auto t = this;
+        while (t -> continuation()) { t = t -> continuation(); }
+        t -> set_continuation (&value);
+    }
 };
 

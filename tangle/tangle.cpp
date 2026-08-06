@@ -314,15 +314,6 @@ constexpr auto check_sum     = ascii_code_t {0x7D};  /// @$ denotes the string p
 constexpr auto join          = ascii_code_t {0x7F};  /// @& is the item concatenation operator
 
 // section 73
-
-/// stores high byte, then low byte in tok_mem
-void
-store_two_bytes (uint16_t x)
-{
-    text_mgr.append_to_next_new (x >> 8);
-    text_mgr.append_to_next_new (x & 0xFF);
-}
-
 // section 74, 75, 76 implement print_repl for debug mode if that gets included
 // section 77 nothing tbd
 // section 78
@@ -364,8 +355,8 @@ initialize_output_stacks ()
     stack_ptr   = 1_r;
     brace_level = 0_r;
     cur_name    = nullptr;
-    cur_repl    = text_mgr.storage.record_0().link ();
-    cur_bytes   = cur_repl ? cur_repl->content() : text_manager::string_view {};
+    cur_repl    = text_mgr.storage.record_0 ().continuation ();
+    cur_bytes   = cur_repl ? cur_repl->content () : text_manager::string_view {};
     cur_mod = 0_r;
 }
 
@@ -394,17 +385,17 @@ pop_parameter_stack ();
 void
 pop_level ()
 {
-    auto repl = cur_repl -> link ();
-    if (repl == &text_mgr.storage.record_0())  // end of macro expansion
+    auto continuation = cur_repl -> continuation ();
+    if (continuation == &text_mgr.storage.record_0())  // end of macro expansion
     {
         if (cur_name->ilk() == parametric)
         {
             pop_parameter_stack ();
         }
     }
-    else if (repl)  // link to a continuation
+    else if (continuation)
     {
-        cur_repl = repl;  // stay on same level
+        cur_repl = continuation;  // stay on same level
         cur_bytes = cur_repl->content();
         return;
     }
@@ -460,8 +451,6 @@ get_output_impl ()
             continue;
         }
 
-        a = a << 8 | cur_bytes[0]; cur_bytes.remove_prefix(1);
-
         if (a < 0xA800)
         {
             a -= 0x8000;
@@ -494,7 +483,7 @@ get_output_impl ()
                 copy_parameter_to_text_mgr (cur_bytes);
 
                 auto &new_text = text_mgr.storage.add_next_new ();
-                new_text.set_link(&text_mgr.storage.record_0());
+                new_text.set_continuation (&text_mgr.storage.record_0 ());
                 name_mgr.add_simple (&new_text);
 
                 push_level (name);
@@ -526,9 +515,8 @@ get_output_impl ()
         }
 
         cur_val = a - 0xD000;
-        a       = module_number;
         cur_mod = mod_pointer_t {cur_val};
-        return a;
+        return module_number;
     }
 }
 
@@ -575,13 +563,6 @@ copy_parameter_to_text_mgr (text_manager::string_view &str)
     while (balance > 0)
     {
         auto b = str [0];
-        if (b >= 0x80)
-        {
-            store_two_bytes (b << 8 | str [1]); 
-            str.remove_prefix (2);
-            continue;
-        }
-
         switch (b)
         {
         case U'(': 
@@ -608,7 +589,7 @@ copy_parameter_to_text_mgr (text_manager::string_view &str)
 
         case param:
             str.remove_prefix (1);
-            store_two_bytes (0x8000 + name_mgr.index_of (name_mgr.last ()));
+            text_mgr.append_to_next_new (0x8000 + name_mgr.index_of (name_mgr.last ()));
             break;
 
         default:
@@ -683,24 +664,23 @@ send_the_output ();
 void
 output_compressed_tables (terminal &term)
 {
-    if (!text_mgr.storage.record_0().link())
+    if (!text_mgr.storage.record_0().continuation())
     {
         err.terminal ().print_nl ("! No output was specified.");
         err.mark_harmless ();
+        return;
     }
-    else
+
+    term.print_nl ("Writing the output file");
+    term.update ();
+    initialize_output_stacks ();
+    send_the_output ();
+    out_buf.flush_last_line ();
+    if (brace_level != 0)
     {
-        term.print_nl ("Writing the output file");
-        term.update ();
-        initialize_output_stacks ();
-        send_the_output ();
-        out_buf.flush_last_line ();
-        if (brace_level != 0)
-        {
-            err.err_print ("! Program ended at brace level {}", brace_level);
-        }
-        term.print_nl ("Done.");
+        err.err_print ("! Program ended at brace level {}", brace_level);
     }
+    term.print_nl ("Done.");
 }
 
 // section 113
@@ -724,9 +704,9 @@ output_compressed_tables (terminal &term)
 #define DEF_26_CASES_OF(x, i) DEF_16_CASES_OF (x, i) DEF_10_CASES_OF (x, i + 16)
 
 void
-send_output_identifier ();
+send_output_identifier (std::u8string_view id);
 void
-send_output_module_number ();
+send_output_module_number (int module_number);
 void
 send_output_string ();
 void
@@ -821,8 +801,8 @@ send_output_one_char ()
     case double_dot      : out_proc.process_string (u8".."); break;
     case begin_comment   : send_output_begin_comment (); break;
     case end_comment     : send_output_end_comment (); break;
-    case identifier      : send_output_identifier (); break;
-    case module_number   : send_output_module_number (); break;
+    case identifier      : send_output_identifier (name_mgr.name_at (cur_val).content()); break;
+    case module_number   : send_output_module_number (cur_val); break;
     case verbatim        : send_output_verbatim_string (); break;
     case octal           : send_out_number (u8'0', 8, 0x10000000, is_octal); break;
     case hex             : send_out_number (u8'0', 16, 0x8000000, is_hex); break;
@@ -850,12 +830,12 @@ send_the_output ()
 // section 116
 
 void
-send_output_identifier ()
+send_output_identifier (std::u8string_view id)
 {
     auto   buffer = std::array<ascii_code_t, config::max_id_length> {};
     size_t k      = 0;
 
-    for (auto ch : name_mgr.name_at (cur_val).content())
+    for (auto ch : id)
     {
         if (ch != u8'_')
         {
@@ -999,21 +979,21 @@ finish_real_constant (bool start_with_dot)
 
 // section 121
 void
-send_output_module_number ()
+send_output_module_number (int module_number)
 {
     constexpr size_t buf_size  = config::max_digits + 3;  // digits + 2 braces + 1 colon
     auto             buffer    = std::array<char8_t, buf_size> {};
     auto            *write_ptr = buffer.data ();
     *write_ptr++               = (brace_level == 0 ? u8'{' : u8'[');
-    if (cur_val < 0)
+    if (module_number < 0)
     {
         *write_ptr++ = u8':';
-        cur_val      = -cur_val;
+        module_number = -module_number;
     }
 
     ascii_code_t digit_buffer [config::max_digits];
     auto         end   = std::end (digit_buffer);
-    auto         begin = to_chars (end, cur_val);
+    auto         begin = to_chars (end, module_number);
     write_ptr          = std::copy (begin, end, write_ptr);
 
     if (buffer [1] != u8':')
@@ -1908,10 +1888,6 @@ scan_numeric ()
 
 // section 163 nothing tbd
 // section 164
-
-/// replacement text formed by scan_repl
-text_t * cur_repl_text = &text_mgr.storage.record_0();
-
 // section 165, 167
 
 void
@@ -1921,8 +1897,8 @@ copy_verbatim_from_buffer_to_text_mgr ();
 void
 ensure_parantheses_balance (int &balance);
 
-void
-scan_repl (uint8_t type)
+auto &
+scan_replacement (uint8_t type)
 {
     int     balance = 0;  /// left parentheses minus right parentheses
     index_t a;
@@ -1967,14 +1943,14 @@ scan_repl (uint8_t type)
         case identifier:
         {
             auto &name = name_mgr.lookup (normal, current_id);
-            store_two_bytes (0x8000 + name_mgr.index_of (name));
+            text_mgr.append_to_next_new (0x8000 + name_mgr.index_of (name));
             break;
         }
 
         case module_name:
             if (type == module_name)
             {
-                store_two_bytes(0xA800 + name_mgr.index_of (*cur_module));
+                text_mgr.append_to_next_new (0xA800 + name_mgr.index_of (*cur_module));
                 break;
             }
             done = true;
@@ -2000,7 +1976,7 @@ scan_repl (uint8_t type)
         case new_module: done = true; break;
         
         default:
-            text_mgr.append_to_next_new (a & 0xFF);
+            text_mgr.append_to_next_new (a);
             break;
         }
     }
@@ -2009,7 +1985,7 @@ scan_repl (uint8_t type)
     next_control = a & 0xFF;
     ensure_parantheses_balance (balance);
 
-    cur_repl_text = &text_mgr.storage.add_next_new ();
+    return text_mgr.storage.add_next_new ();
 }
 
 // section 166
@@ -2129,9 +2105,9 @@ void
 define_macro (ilk_value type)
 {
     auto &name = name_mgr.lookup (type, current_id);
-    scan_repl (type);
-    name.set_replacement_text (cur_repl_text);
-    cur_repl_text->set_link(&text_mgr.storage.record_0());
+    auto &replacement_text = scan_replacement (type);
+    name.set_replacement_text (&replacement_text);
+    replacement_text.set_continuation (&text_mgr.storage.record_0());
 }
 
 // section 171 nothing tbd
@@ -2245,30 +2221,24 @@ scan_pascal_part ()
         return;
     }
 
-    // Insert module number into tok_mem
-    store_two_bytes (0xD000 + module_count);
-    scan_repl (module_name);                   // now cur_repl_text points to the replacement text
+    text_mgr.append_to_next_new (0xD000 + module_count);
+    auto &replacement_text = scan_replacement (module_name);
+    replacement_text.set_continuation (nullptr);  // mark this replacement text as nonmacro
 
     if (!p)  // unnamed module
     {
-        last_unnamed->set_link(cur_repl_text);
-        last_unnamed = cur_repl_text;
+        last_unnamed->set_continuation (&replacement_text);
+        last_unnamed = &replacement_text;
     }
-    else if (p -> replacement_text() == 0)  // first module of this name
+    else if (p -> replacement_text())
     {
-        p -> set_replacement_text(cur_repl_text);
+        p -> replacement_text () -> append_continuation (replacement_text);
     }
     else
     {
-        auto t = p -> replacement_text();
-        while (t->link())  // find end of list
-        {
-            t = t->link();
-        }
-        t->set_link(cur_repl_text);
+        p -> set_replacement_text (&replacement_text);
     }
 
-    cur_repl_text -> set_link(nullptr);  // mark this replacement text as nonmacro
 }
 
 // section 179, 180, 181: debugging, left out for now
@@ -2298,7 +2268,7 @@ initialize ()
     // section 52
     // section 71
     last_unnamed    = &text_mgr.storage.record_0();
-    text_mgr.storage.record_0().set_link(&text_mgr.storage.record_0());
+    text_mgr.storage.record_0 ().set_continuation (&text_mgr.storage.record_0 ());
 
     // section 144
     scanning_hex = false;
