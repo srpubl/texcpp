@@ -30,7 +30,7 @@ chop_id (std::u8string_view id, chopped_id_t &chopped_id)
 
         if (ch >= u8'a')
         {
-            ch -= 040;
+            ch -= 0x20;
         }
 
         chopped_id [length++] = ch;
@@ -43,8 +43,8 @@ name_manager::initialize (size_t max_chars, size_t max_names)
 {
     root = nullptr;
     storage.initialize(max_chars, max_names);
-    std::fill (hash_bucket.begin (), hash_bucket.end (), hash_bucket_name_t_link{});
-    std::fill (chop_hash_bucket.begin (), chop_hash_bucket.end (), hash_bucket_name_t_chop_link {});
+    for (auto &bucket : hash_bucket)      { bucket = hash_bucket_name_t_link{}; }
+    for (auto &bucket : chop_hash_bucket) { bucket = hash_bucket_name_t_chop_link{}; }
 }
 
 name_t &
@@ -157,18 +157,15 @@ enum comparison_result
 
 auto
 compare_module_names (std::u8string_view new_name, std::u8string_view old_name) -> comparison_result
-{
-    size_t i        = 0;
-    size_t len      = std::min (old_name.length (), new_name.length ());
+{    
+    auto len = std::min (new_name.length(), old_name.length());
+    auto const result = new_name.substr (0, len) <=> old_name.substr (0, len);
 
-    for (; i < len; ++i)
-    {
-        auto result = new_name [i] <=> old_name [i];
-        if (result != std::strong_ordering::equal)
-            return result == std::strong_ordering::less ? less : greater;
-    }
-
-    return i != old_name.length () ? prefix : i != new_name.length () ? extension : equal;
+    return result == std::strong_ordering::less ? less
+         : result == std::strong_ordering::greater ? greater
+         : new_name.length () < old_name.length () ? prefix 
+         : new_name.length () > old_name.length () ? extension 
+         : equal;
 }
 
 auto

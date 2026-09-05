@@ -1,74 +1,85 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
 namespace util
 {
 
+
+/// Can only be used for pointers within the same array (or vector if this is guaranteed to never be
+/// resized).
+/// An instance cannot express pointing to itself, this would be equivalent to a null pointer. The
+/// implementation does not check this case, so beware.    
 template<typename T>
 class smallptr 
 {
     int32_t offset = 0;
 
 public:
-    constexpr smallptr () : offset (0) {}
-    constexpr smallptr (std::nullptr_t) : offset (0) {}
-    constexpr smallptr (T *target) { assign(target); }
-    constexpr smallptr (const smallptr &source) { assign (&*source); }
-    constexpr smallptr (smallptr &&source) noexcept 
+    smallptr () : offset (0) {}
+    smallptr (std::nullptr_t) : offset (0) {}
+    smallptr (T *target) { assign (target); }
+    smallptr (const smallptr &source) { assign (source.get()); }
+    smallptr (smallptr &&source) noexcept 
     { 
-        assign (&*source); 
+        assign (source.get()); 
         source.offset = 0;
     }
     
-    constexpr smallptr & 
+    smallptr & 
     operator= (T *target) 
     {
         assign (target);
         return *this;
     }
 
-    constexpr smallptr &
+    smallptr &
     operator= (std::nullptr_t) 
     {
         offset = 0;
         return *this;
     }
 
-    constexpr smallptr & 
+    smallptr & 
     operator= (const smallptr &source)
     {
-        assign (&*source);
+        assign (source.get());
         return *this;
     }
 
-    constexpr smallptr & operator= (smallptr &&source) noexcept 
+    smallptr & 
+    operator= (smallptr &&source) noexcept 
     {
         if (this != &source) 
         {
-            assign (&*source);
-            source.offset = 0; // Safe cleanup of the old moved-from pointer
+            assign (source.get());
+            source.offset = 0;
         }
         return *this;
     }
 
-    constexpr explicit operator bool () const { return offset != 0; }
+    explicit 
+    operator bool () const { return offset != 0; }
 
     T * 
-    operator-> () const 
+    operator-> () const { return get (); }
+    T & 
+    operator* () const { return *get (); }
+    operator T* () const { return get (); }
+
+    T *
+    get () const
     {
         if (!offset) 
             return nullptr;
 
-        return reinterpret_cast<T *>(reinterpret_cast<uintptr_t>(this) + offset);
+        return reinterpret_cast<T *>(reinterpret_cast<uintptr_t>(this) + offset);        
     }
 
-    T& operator*() const { return *(this->operator->()); }
-    operator T*() const { return this->operator->(); }
-
 private:
-    constexpr void assign(T *target) 
+    void assign (const T *target) 
     {
         if (!target) 
         {
@@ -76,15 +87,18 @@ private:
         } 
         else 
         {
-            // Constexpr-safe distance calculation if evaluated at compile-time, 
-            // otherwise falls back to bitwise uintptr_t math to avoid Undefined Behavior.
-            offset = std::is_constant_evaluated()
-                ? static_cast <int32_t> (target - reinterpret_cast <T *> (this))
-                : static_cast <int32_t> (reinterpret_cast <uintptr_t> (target) 
+            offset = 
+                static_cast <int32_t> (
+                      reinterpret_cast <uintptr_t> (target) 
                     - reinterpret_cast <uintptr_t> (this));
         }
     }
 };
 
+static_assert(std::is_nothrow_move_constructible_v<smallptr<int>>, 
+              "util::smallptr must be noexcept move constructible for container optimization");
+
+static_assert(std::is_nothrow_move_assignable_v<smallptr<int>>, 
+              "util::smallptr must be noexcept move assignable for container optimization");
 }
 

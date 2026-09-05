@@ -67,7 +67,7 @@ private:
     constexpr void
     check_size_of_records () const
     {
-        if (records.size () > records.capacity () - 1)
+        if (records.size () >= records.capacity ())
             throw std::length_error (descriptive_type_name <record_type>);
     }
 

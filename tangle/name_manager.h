@@ -9,8 +9,6 @@
 #include "utility/string_storage.h"
 #include "name.h"
 
-using namespace std::literals;
-
 using index_t = uint32_t;
 
 using on_error_t      = void (*) ();
@@ -67,6 +65,7 @@ public:
     void
     add_simple (text_t * replacement_text)
     {
+        using namespace std::literals;
         auto &new_name = storage.add(u8""sv);
         new_name.set_ilk(simple);
         new_name.set_replacement_text (replacement_text);

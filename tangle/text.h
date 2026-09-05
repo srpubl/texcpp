@@ -10,10 +10,10 @@ class text_t : public util::string_record <char32_t, text_t>
 public:
     explicit text_t (char32_t const *start) : util::string_record <char_type, text_t> (start) {}
 
-    auto constexpr continuation ()  const -> text_t * { return _continuation; }
-    auto constexpr set_continuation (text_t * value) { this->_continuation = value; }
+    auto continuation ()  const -> text_t * { return _continuation; }
+    auto set_continuation (text_t * value) { this->_continuation = value; }
 
-    auto constexpr
+    auto
     append_continuation (text_t & value)
     {
         auto t = this;
