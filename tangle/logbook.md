@@ -520,5 +520,4 @@ subclass of this class to be passed in our constructor. This also avoids checkin
 handlers have been set.
 
 We are finally in a position where we can move all of this code into new header and implementation
-files.
-
+files. There, we also replace `stack` and `stack_ptr` with a `std::vector`.

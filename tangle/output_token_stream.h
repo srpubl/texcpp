@@ -1,37 +1,30 @@
 #include <string_view>
+#include <vector>
 
-#include "pascal/array.h"
-#include "pascal/range.h"
-
+#include "config.h"
 #include "name_manager.h"
 #include "text_manager.h"
-
-
-// TODO: Move to right place
-constexpr auto param         = char8_t {0x00};
 
 namespace internal
 {
 
 struct output_state
 {
-    text_manager::string_view bytes;
     name_t const * name;            /// pointer to current name being expanded
-    text_t const * replacement;     /// pointer to current replacement text
     int  module_number;             /// module number or zero if not a module
+    text_t const * replacement;     /// pointer to current replacement text
+    text_manager::string_view bytes;
 
-    void initialize (text_t const * replacement)
+    output_state (name_t const &name)
+    : name (&name), module_number (0)
     {
-        name    = nullptr;
-        set_replacement (replacement);
-        module_number = 0;
+        set_replacement (name.replacement_text());
     }
 
-    void push (name_t const &name) 
+    output_state (text_t const * replacement)
+    : name (nullptr), module_number (0)
     {
-        this -> name = &name;
-        set_replacement (name.replacement_text());
-        module_number = 0;
+        set_replacement (replacement);
     }
 
     void set_replacement (text_t const *replacement)
@@ -45,6 +38,8 @@ struct output_state
 
 // section 79
 
+// TODO: Move to right place
+constexpr auto param         = char8_t {0x00};
 constexpr auto number        = 0x80;  /// code returned by get_output when next output is numeric
 constexpr auto module_number = 0x81;  /// code returned by get_output for module numbers
 constexpr auto identifier    = 0x82;  /// code returned by get_output for identifiers
@@ -65,34 +60,31 @@ private:
     text_manager &text_mgr;
     error_handlers &err;
 
-    pascal::int_range_array<1, config::stack_size, internal::output_state>
-    stack = {};
-    
-    pascal::int_range<0, config::stack_size> 
-    stack_ptr = {};
+    std::vector <internal::output_state>
+    stack;
 
     int _extra;
 
-    auto & cur_state () { return stack [stack_ptr]; }
+    auto & cur_state () { return stack.back(); }
 
 public:
     output_token_stream (name_manager &name_mgr, text_manager &text_mgr, error_handlers &err)
     : name_mgr (name_mgr), text_mgr (text_mgr), err (err)
-    {}
+    {
+        stack.reserve (config::stack_size);
+    }
 
     void
     initialize ()
     {
-        using namespace pascal;
-        stack_ptr = 1_r;
-        cur_state().initialize (text_mgr.storage.record_0 ().continuation ());
+        stack.emplace_back (text_mgr.storage.record_0 ().continuation ());
     }
 
     char32_t
     get_output ();
 
     bool
-    has_more () { return stack_ptr > 0; }
+    has_more () { return stack.size() > 0; }
 
     /// additional information corresponding to output token
     int
@@ -102,11 +94,10 @@ private:
     void
     push_level (name_t const &name)
     {
-        if (stack_ptr == config::stack_size)
-            err.on_stack_overflow ();
+        if (stack.size () == stack.capacity())
+            err.on_stack_overflow();
 
-        stack_ptr++;
-        cur_state().push (name);
+        stack.emplace_back (name);
     }
 
     void
@@ -128,7 +119,7 @@ private:
             return;
         }
 
-        --stack_ptr;  // go down to previous level
+        stack.pop_back ();
     }
 
     bool
