@@ -33,7 +33,9 @@ public:
 
         records.clear ();
         records.reserve (max_records + 1);
-        records.resize (2, record_type {chars.data ()});  // one more to make record 0 of length 0
+        records.emplace_back (chars.data ());
+        records.emplace_back (chars.data ()); // one more to make record 0 of length 0
+        // records.resize cannot be used here because it would require Record_T to be CopyInsertable
     }
 
     auto &
