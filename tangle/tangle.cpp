@@ -18,6 +18,7 @@
 #include "name_manager.h"
 #include "out_buffer.h"
 #include "out_processor.h"
+#include "output_token_stream.h"
 #include "tangle.h"
 #include "terminal.h"
 #include "text_manager.h"
@@ -302,7 +303,7 @@ text_t *last_unnamed = &text_mgr.storage.record_0();  /// most recent replacemen
 // section 72
 
 /// insertion of parameter
-constexpr auto param         = ascii_code_t {0x00};
+// constexpr auto param         = ascii_code_t {0x00};
 constexpr auto verbatim      = ascii_code_t {0x02};     /// @= begins a verbatim Pascal string, @> ends it
 constexpr auto force_line    = ascii_code_t {0x03};     /// @\ forces a new line in the Pascal output
 constexpr auto begin_comment = ascii_code_t {0x09};   /// @{ turns into { or [. in output
@@ -318,28 +319,36 @@ constexpr auto join          = ascii_code_t {0x7F};  /// @& is the item concaten
 // section 77 nothing tbd
 // section 78
 
-using mod_pointer_t = pascal::int_range<0, config::max_modules>;
-
-struct output_state
+struct output_token_stream_error_handlers : public output_token_stream::error_handlers
 {
-    text_manager::string_view bytes;
-    name_t const * name_field; 
-    text_t const * repl_field;
-    mod_pointer_t  mod_field;   /// module number or zero if not a module
+    void
+    on_stack_overflow () override
+    {  err.overflow ("stack"); }
+
+    void
+    on_name_not_found (std::u8string_view id) override
+    {
+        err.terminal ().print_nl ("! Not present: <");
+        print (err.terminal (), id);
+        err.terminal ().print ('>');
+        err.error ();
+    }
+
+    void
+    on_missing_parameter (std::u8string_view id) override
+    {
+        err.terminal ().print_nl ("! No parameter given for ");
+        print (err.terminal (), id);
+        err.error ();
+    }
+
+    void 
+    on_invalid_ilk () override
+    { err.confusion("output"); }
 };
 
-// section 79
-
-/// current output state
-auto  cur_state = output_state {};
-
-auto &cur_bytes = cur_state.bytes;
-auto &cur_name  = cur_state.name_field;  /// pointer to current name being expanded
-auto &cur_repl  = cur_state.repl_field;  /// pointer to current replacement text
-auto &cur_mod   = cur_state.mod_field;   /// current module number being expanded
-
-auto  stack     = pascal::int_range_array<1, config::stack_size, output_state> {};
-auto  stack_ptr = pascal::int_range<0, config::stack_size> {};
+auto output_token_str_err = output_token_stream_error_handlers {};
+auto output_token_str = output_token_stream {name_mgr, text_mgr, output_token_str_err};
 
 /// section 80
 // section 81 nothing tbd
@@ -352,173 +361,16 @@ auto brace_level = uint8_t {};  /// current depth of @{...@} nesting
 void
 initialize_output_stacks ()
 {
-    stack_ptr   = 1_r;
+    output_token_str.initialize();
     brace_level = 0_r;
-    cur_name    = nullptr;
-    cur_repl    = text_mgr.storage.record_0 ().continuation ();
-    cur_bytes   = cur_repl ? cur_repl->content () : text_manager::string_view {};
-    cur_mod = 0_r;
 }
 
 // section 84
-
-/// suspends the current level
-void
-push_level (name_t const &name)
-{
-    if (stack_ptr == config::stack_size)
-        err.overflow ("stack");
-
-    stack [stack_ptr++] = cur_state;
-    cur_name            = &name;
-    cur_repl            = name.replacement_text ();
-    cur_bytes   = cur_repl ? cur_repl->content() : text_manager::string_view {};
-
-    cur_mod = 0_r;
-}
-
 // section 85
-
-void
-pop_parameter_stack ();
-
-void
-pop_level ()
-{
-    auto continuation = cur_repl -> continuation ();
-    if (continuation == &text_mgr.storage.record_0())  // end of macro expansion
-    {
-        if (cur_name->ilk() == parametric)
-        {
-            pop_parameter_stack ();
-        }
-    }
-    else if (continuation)
-    {
-        cur_repl = continuation;  // stay on same level
-        cur_bytes = cur_repl->content();
-        return;
-    }
-
-    if (--stack_ptr > 0)  // go down to previous level
-    {
-        cur_state = stack [stack_ptr];
-    }
-}
-
 // section 86
-
-constexpr auto number        = 0x80;  /// code returned by get output when next output is numeric
-constexpr auto module_number = 0x81;  ///  code returned by get output for module numbers
-constexpr auto identifier    = 0x82;  /// code returned by get output for identifiers
-
-int            cur_val;  /// additional information corresponding to output token
-
 // section 87, 88, 89, 90, 92
 
-void
-copy_parameter_to_text_mgr (text_manager::string_view &str);
-
 /// returns next token after macro expansion
-char32_t
-get_output_impl ()
-{
-    while (true)  // because we need to restart once in a while
-    {
-        if (stack_ptr == 0)
-            return 0;
-
-        if (cur_bytes.empty())
-        {
-            cur_val = -cur_mod;
-            pop_level ();
-            if (cur_val == 0)
-                continue;
-
-            return module_number;
-        }
-
-        auto a = cur_bytes[0]; cur_bytes.remove_prefix(1);
-
-        if (a < 0x80)  // one-byte token
-        {
-            if (a != param)
-                return a;
-
-            // section 92
-            // start scanning current macro parameter
-            push_level (name_mgr.last ());
-            continue;
-        }
-
-        if (a < 0xA800)
-        {
-            a -= 0x8000;
-            auto &name = name_mgr.name_at(a);
-
-            // section 89
-
-            switch (name.ilk ())
-            {
-            case normal : cur_val = a; return identifier;
-
-            case numeric: cur_val = name.number (); return number;
-
-            case simple : push_level (name); continue;
-
-            case parametric:
-            {
-                // section 90
-
-                while (cur_bytes.empty () && stack_ptr > 0) { pop_level (); }
-
-                if (stack_ptr == 0 || cur_bytes [0] != u8'(')
-                {
-                    err.terminal ().print_nl ("! No parameter given for ");
-                    print (err.terminal (), name.content ());
-                    err.error ();
-                    continue;
-                }
-
-                copy_parameter_to_text_mgr (cur_bytes);
-
-                auto &new_text = text_mgr.storage.add_next_new ();
-                new_text.set_continuation (&text_mgr.storage.record_0 ());
-                name_mgr.add_simple (&new_text);
-
-                push_level (name);
-                continue;
-            }
-
-            default: err.confusion ("output");
-            }
-        }
-
-        if (a < 0xD000)
-        {
-            // section 88
-
-            a -= 0xA800;
-            auto &name = name_mgr.name_at (a);
-            if (name.replacement_text() != 0)
-            {
-                push_level (name);
-            }
-            else if (a != 0)
-            {
-                err.terminal ().print_nl ("! Not present: <");
-                print (err.terminal (), name.content());
-                err.terminal ().print ('>');
-                err.error ();
-            }
-            continue;
-        }
-
-        cur_val = a - 0xD000;
-        cur_mod = mod_pointer_t {cur_val};
-        return module_number;
-    }
-}
 
 int last_char;
 
@@ -526,7 +378,7 @@ ascii_code_t
 get_output ()
 {
     if (last_char < 0)
-        return static_cast<ascii_code_t> (get_output_impl () & 0xFF);
+        return static_cast<ascii_code_t> (output_token_str.get_output () & 0xFF);
 
     ascii_code_t res = static_cast<ascii_code_t> (last_char & 0xFF);
     last_char        = -1;
@@ -547,59 +399,7 @@ peek_output ()
 
 // section 91
 
-void
-pop_parameter_stack ()
-{
-    name_mgr.remove_last();
-    text_mgr.storage.remove_last();
-}
-
 // section 93 .
-void
-copy_parameter_to_text_mgr (text_manager::string_view &str)
-{
-    int balance = 1;  /// excess of ( versus ) while copying a parameter
-    str.remove_prefix (1);  // opening (
-    while (balance > 0)
-    {
-        auto b = str [0];
-        switch (b)
-        {
-        case U'(': 
-            ++balance; 
-            str.remove_prefix (1);
-            text_mgr.append_to_next_new (b);
-            break;
-
-        case U')':
-            str.remove_prefix (1);
-            if (--balance == 0)
-                break;
-
-            text_mgr.append_to_next_new (b);
-            break;
-
-        case U'\'':
-        {
-            auto slice = str.substr (0, str.find(U'\'', 1) + 1);   
-            text_mgr.append_to_next_new (slice);                    
-            str.remove_prefix (slice.size());
-            break;  
-        }
-
-        case param:
-            str.remove_prefix (1);
-            text_mgr.append_to_next_new (0x8000 + name_mgr.index_of (name_mgr.last ()));
-            break;
-
-        default:
-            str.remove_prefix (1);
-            text_mgr.append_to_next_new (b);
-            break;
-        }            
-    }
-}
-
 // section 94
 // section 95
 
@@ -643,6 +443,8 @@ on_line_truncated ()
 void
 on_missing_sign_between_numbers ()
 { err.err_print ("! Two numbers occurred without a sign between them"); }
+
+
 
 // section 98
 // section 99
@@ -801,12 +603,12 @@ send_output_one_char ()
     case double_dot      : out_proc.process_string (u8".."); break;
     case begin_comment   : send_output_begin_comment (); break;
     case end_comment     : send_output_end_comment (); break;
-    case identifier      : send_output_identifier (name_mgr.name_at (cur_val).content()); break;
-    case module_number   : send_output_module_number (cur_val); break;
+    case identifier      : send_output_identifier (name_mgr.name_at (output_token_str.extra()).content()); break;
+    case module_number   : send_output_module_number (output_token_str.extra()); break;
     case verbatim        : send_output_verbatim_string (); break;
     case octal           : send_out_number (u8'0', 8, 0x10000000, is_octal); break;
     case hex             : send_out_number (u8'0', 16, 0x8000000, is_hex); break;
-    case number          : out_proc.process_value (cur_val); break;
+    case number          : out_proc.process_value (output_token_str.extra()); break;
     case check_sum       : out_proc.process_value (pool_check_sum); break;
     case force_line      : out_proc.force_line_break (); break;
 
@@ -822,7 +624,7 @@ send_output_one_char ()
 void
 send_the_output ()
 {
-    while (stack_ptr > 0 || last_char >= 0) { send_output_one_char (); }
+    while (output_token_str.has_more() || last_char >= 0) { send_output_one_char (); }
 }
 
 // section 114
@@ -866,7 +668,7 @@ send_output_string ()
         }
         buffer [k] = ch = get_output ();
     }
-    while (ch != u8'\'' && stack_ptr != 0);
+    while (ch != u8'\'' && output_token_str.has_more());
 
     if (k == config::line_length - 1)
     {
@@ -895,7 +697,7 @@ send_output_verbatim_string ()
             ++k;
         }
     }
-    while (ch != verbatim && stack_ptr != 0);
+    while (ch != verbatim && output_token_str.has_more());
 
     if (k == config::line_length - 1)
     {
@@ -1327,7 +1129,7 @@ constexpr auto module_name  = ascii_code_t {0x87};  /// control code for ‘@<�
 constexpr auto new_module   = ascii_code_t {0x88};  /// control code for ‘@ ’ and ‘@*’
 
 // Declared in module 171 what needed here already
-mod_pointer_t module_count;
+int module_count;
 
 ascii_code_t
 control_code (ascii_code_t c)
@@ -2309,7 +2111,7 @@ tangle (
     term.print_ln ("{}", config::banner);
 
     err.set_print_error_location (print_error_location_input);
-    module_count = 0_r;
+    module_count = 0;
 
     do { next_control = skip_ahead (); }
     while (next_control != new_module);

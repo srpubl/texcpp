@@ -496,3 +496,29 @@ for further simplifications of logic.
 We also remove `cur_repl_text` as this is just the (new) return value from `scan_repl` used locally
 after a call to that function.  
 
+## Output token stream
+
+We add three convenience methods to `output_state` but leave its members openly accessible because it
+will be used only from within the output token stream (and thus just has data type semantics). We then
+move `stack` and `stack_ptr` into the new class `output_token_stream` and keep them public while we 
+refactor; eventually they will be private.
+
+We notice that `cur_state` is not really required as an additional variable. We just refer to the top of
+the output stack and thus make `cur_state` a member function of `output_token_stream`. Now, we move
+`push_level` and `pop_level` to `output_token_stream` and add a few more convenience functions. Next, 
+we bring `copy_parameter_to_text_mgr` into our new class and extract `push_parametric` from 
+`get_output_impl`.
+
+We then also move `cur_val` into the class renaming it to `extra`. Finally, we move `get_output_impl`
+into `output_token_stream`, and make everything private that we can. The public interface becomes very 
+lean now: Besides the constructor and `initialize`, we merely expose `get_output`, `extra`, and 
+`has_more`.
+
+To simplify the dealing with error handlers (there are 4 of them in this class), we create the class 
+`error_handlers` within `output_token_stream` with 4 abstract functions and require an instance of a 
+subclass of this class to be passed in our constructor. This also avoids checking whether the error
+handlers have been set.
+
+We are finally in a position where we can move all of this code into new header and implementation
+files.
+
