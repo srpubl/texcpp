@@ -44,7 +44,7 @@ output_token_stream::get_output ()
             case numeric   : _extra = name.number (); return number;
             case simple    : push_level (name); continue;
             case parametric: push_parametric (name); continue;
-            default        : err.on_invalid_ilk ();
+            default        : diagnose.on_invalid_ilk ();
             }
         }
 
@@ -60,7 +60,7 @@ output_token_stream::get_output ()
             }
             else if (a != 0)
             {
-                err.on_name_not_found (name.content());
+                diagnose.on_name_not_found (name.content());
             }
             continue;
         }
@@ -77,7 +77,7 @@ output_token_stream::push_parametric (name_t const &name)
 
     if (!has_more () || peek_char () != u8'(')
     {   
-        err.on_missing_parameter (name.content ());
+        diagnose.on_missing_parameter (name.content ());
         return;
     }
 

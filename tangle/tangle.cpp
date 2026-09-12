@@ -13,6 +13,8 @@
 #include "pascal/range.h"
 #include "pascal/text_file.h"
 
+#include "config.h"
+
 #include "character.h"
 #include "error.h"
 #include "name_manager.h"
@@ -23,7 +25,12 @@
 #include "terminal.h"
 #include "text_manager.h"
 
-#include "config.h"
+
+#include "diagnostics/name_manager_diagnostics.h"
+#include "diagnostics/out_processor_diagnostics.h"
+#include "diagnostics/out_buffer_diagnostics.h"
+#include "diagnostics/output_token_stream_diagnostics.h"
+
 
 static_assert (CHAR_BIT == 8, "Error: This codebase strictly requires an 8-bit char architecture");
 
@@ -53,15 +60,6 @@ pascal::text_file change_file;
 
 terminal          term {stdout};
 error_manager     err {term};
-
-void
-print (terminal &term, ascii_code_t c)
-{ term.print (convert_to_output (c)); }
-
-void
-print (terminal &term, std::u8string_view str)
-{ for (auto ch : str) { print (term, ch); }}
-
 
 // section 24
 void
@@ -163,25 +161,25 @@ print_error_location_input (terminal &term)
     for (buf_index_t k = 0_r; k < l; ++k)
     {
         auto ch = buffer [k];
-        print (term, ch == tab_mark ? u8' ' : ch);
+        term.print (ch == tab_mark ? u8' ' : ch);
     }
     term.print_nl ("{:>{}}", "", int {l});
 
     // print not yet read characters
-    print (term, {&buffer[l], &buffer[limit]});
+    term.print ({&buffer[l], &buffer[limit]});
     term.print (' ');
 }
 
 // section 33
 
-// defined in later section but needed here already
-auto out_buf = out_buffer {config::line_length, pascal_file};
+auto out_buf_diag = out_buffer_diagnostics {term, err};
+auto out_buf = out_buffer {config::line_length, pascal_file, out_buf_diag};
 
 void
 print_error_location_output (terminal &term)
 {
     term.print_ln (". (l.{})", out_buf.current_line ());
-    print (term, out_buf.temporary_view ());
+    term.print (out_buf.temporary_view ());
     term.print ("... ");
 }
 
@@ -194,7 +192,6 @@ print_error_location_output (terminal &term)
 
 using index_t         = config::index_t;  /// used to store indices in arrays
 
-name_manager name_mgr;
 text_manager text_mgr;
 
 // section 39
@@ -284,6 +281,10 @@ on_add_string (std::u8string_view id) -> index_t
     return string_ptr++;
 }
 
+auto name_mgr_diag = name_manager_diagnostics {err};
+auto name_mgr     = name_manager {name_mgr_diag, on_add_string};
+
+
 // section 65
 
 /// Index in one name
@@ -319,36 +320,9 @@ constexpr auto join          = ascii_code_t {0x7F};  /// @& is the item concaten
 // section 77 nothing tbd
 // section 78
 
-struct output_token_stream_error_handlers : public output_token_stream::error_handlers
-{
-    void
-    on_stack_overflow () override
-    {  err.overflow ("stack"); }
 
-    void
-    on_name_not_found (std::u8string_view id) override
-    {
-        err.terminal ().print_nl ("! Not present: <");
-        print (err.terminal (), id);
-        err.terminal ().print ('>');
-        err.error ();
-    }
-
-    void
-    on_missing_parameter (std::u8string_view id) override
-    {
-        err.terminal ().print_nl ("! No parameter given for ");
-        print (err.terminal (), id);
-        err.error ();
-    }
-
-    void 
-    on_invalid_ilk () override
-    { err.confusion("output"); }
-};
-
-auto output_token_str_err = output_token_stream_error_handlers {};
-auto output_token_str = output_token_stream {name_mgr, text_mgr, output_token_str_err};
+auto output_token_str_diag = output_token_stream_diagnostics {err};
+auto output_token_str     = output_token_stream {name_mgr, text_mgr, output_token_str_diag};
 
 /// section 80
 // section 81 nothing tbd
@@ -403,49 +377,11 @@ peek_output ()
 // section 94
 // section 95
 
-auto out_proc = out_processor {out_buf};
+auto out_proc_diag = out_processor_diagnostics {err};
+auto out_proc = out_processor {out_buf, out_proc_diag};
 
 // section 96
 // section 97
-
-void on_already_appeared () { err.err_print ("! This identifier has already appeared"); }
-void on_defined_before () { err.err_print ("! This identifier was defined before"); }
-void on_incompatible () { err.err_print ("! Incompatible section names"); }
-void on_no_match () { err.err_print ("! Name does not match"); }
-void on_too_many_matches () { err.err_print ("! Ambiguous prefix"); }
-
-void
-on_id_conflict (std::u8string_view id)
-{
-    err.terminal ().print_nl ("! Identifier conflict with ");
-    print (err.terminal (), id);
-    err.error ();
-}
-
-void
-on_new_line (int line)
-{
-    if (line % 100 == 0)
-    {
-        term.print ('.');
-        if (line % 500 == 0)
-        {
-            term.print ("{}", line);
-        }
-        term.update ();
-    }
-}
-
-void
-on_line_truncated ()
-{ err.err_print ("! Long line must be truncated"); }
-
-void
-on_missing_sign_between_numbers ()
-{ err.err_print ("! Two numbers occurred without a sign between them"); }
-
-
-
 // section 98
 // section 99
 // section 100
@@ -1538,7 +1474,7 @@ put_module_name_in_mod_text () -> inname_index_t
     if (k > config::longest_name - 2)
     {
         err.terminal ().print_nl ("! Section name too long: ");
-        print (err.terminal (), {&mod_text.data ()[1], 25});
+        err.terminal ().print ({&mod_text.data ()[1], 25});
         err.terminal ().print ("...");
         err.mark_harmless ();
     }
@@ -2093,19 +2029,7 @@ tangle (
     change_file.assign (change_file_name);
     pascal_file.assign (pascal_file_name);
     pool.assign (pool_file_name);
-
-    out_buf.set_on_new_line (on_new_line);
-    out_buf.set_on_line_truncated (on_line_truncated);
-    out_proc.set_on_missing_sign_between_numbers (on_missing_sign_between_numbers);
-
-    name_mgr.set_on_already_appeared (on_already_appeared);
-    name_mgr.set_on_defined_before (on_defined_before);
-    name_mgr.set_on_id_conflict(on_id_conflict);
-    name_mgr.set_on_add_string(on_add_string);
-    name_mgr.set_on_incompatible(on_incompatible);
-    name_mgr.set_on_no_match(on_no_match);
-    name_mgr.set_on_too_many_matches(on_too_many_matches);
-
+        
     initialize ();
     initialize_input_system ();
     term.print_ln ("{}", config::banner);

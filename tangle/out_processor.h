@@ -4,10 +4,15 @@
 
 #include "out_buffer.h"
 
-using on_missing_sign_between_numbers_t       = void (*) ();
-
 class out_processor
 {
+public:
+    struct diagnostics
+    {
+        virtual void on_missing_sign_between_numbers () = 0;
+    };
+
+private:
     enum state_enum
     {
         misc,
@@ -20,6 +25,7 @@ class out_processor
     };
 
     out_buffer &out_buf;
+    diagnostics &diagnose;
 
     state_enum state    = misc; /// current status of partial output
     int accumulator     = 0;    /// pending value
@@ -28,16 +34,10 @@ class out_processor
 
     ascii_code_t next_sign = 0;
 
-    on_missing_sign_between_numbers_t on_missing_sign_between_numbers = nullptr;
-
 public:
-    out_processor (out_buffer & out_buf)
-        : out_buf (out_buf)
+    out_processor (out_buffer &out_buf, diagnostics &diagnose)
+        : out_buf (out_buf), diagnose (diagnose)
     {}
-
-    void
-    set_on_missing_sign_between_numbers (on_missing_sign_between_numbers_t f)
-    { on_missing_sign_between_numbers = f; }
 
     void 
     ensure_no_line_break ()

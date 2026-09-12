@@ -11,8 +11,6 @@
 
 using index_t = uint32_t;
 
-using on_error_t      = void (*) ();
-using on_error_id_t   = void (*) (std::u8string_view id);
 using on_add_string_t = index_t (*) (std::u8string_view id);
 
 using hash_bucket_name_t_link = util::hash_bucket<name_t, &name_t::link, &name_t::set_link>;
@@ -26,28 +24,29 @@ inline constexpr char const * util::descriptive_type_name<char8_t> = "byte memor
 
 class name_manager
 {
+public:
+    struct diagnostics 
+    {
+        virtual void on_already_appeared () = 0;
+        virtual void on_defined_before   () = 0;
+        virtual void on_incompatible     () = 0;
+        virtual void on_no_match         () = 0;
+        virtual void on_too_many_matches () = 0;
+        virtual void on_id_conflict      (std::u8string_view) = 0;
+    };
+
+private:
+    diagnostics &diagnose;
+    on_add_string_t on_add_string = nullptr;
+
     util::string_storage <name_t> storage;
     std::array<hash_bucket_name_t_link, config::hash_size> hash_bucket = {};
     std::array<hash_bucket_name_t_chop_link, config::hash_size> chop_hash_bucket = {};
     name_t *root = nullptr;
 
-    on_error_t on_already_appeared = nullptr;
-    on_error_t on_defined_before = nullptr;
-    on_error_t on_incompatible = nullptr;
-    on_error_t on_no_match = nullptr;
-    on_error_t on_too_many_matches = nullptr;
-    on_error_id_t on_id_conflict = nullptr;
-    on_add_string_t on_add_string = nullptr;
-
 public:
-    void set_on_already_appeared (on_error_t f) { on_already_appeared = f; }
-    void set_on_defined_before (on_error_t f) { on_defined_before = f; }
-    void set_on_incompatible (on_error_t f) { on_incompatible = f; }
-    void set_on_no_match (on_error_t f) { on_no_match = f; }
-    void set_on_too_many_matches (on_error_t f) { on_too_many_matches = f; }
-    void set_on_id_conflict (on_error_id_t f) { on_id_conflict = f; }
-
-    void set_on_add_string (on_add_string_t f) { on_add_string = f; }
+    name_manager (diagnostics &diagnose, on_add_string_t on_add_string) 
+    : diagnose (diagnose), on_add_string (on_add_string) {}
 
     void
     initialize (size_t max_chars, size_t max_names);

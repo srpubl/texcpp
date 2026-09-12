@@ -14,10 +14,7 @@ out_buffer::flush_line ()
     pascal_file.write_line ();
     
     ++line;
-    if (on_new_line)
-    {
-        on_new_line (line);
-    }
+    diagnose.on_new_line (line);
 
     if (break_index < buffer.size ())
     {
@@ -43,10 +40,7 @@ out_buffer::flush_line ()
 
     if (buffer.size () > line_length)
     {
-        if (on_line_truncated)
-        {
-            on_line_truncated ();
-        }
+        diagnose.on_line_truncated ();
         buffer.resize (line_length);
     }
 }

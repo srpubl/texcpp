@@ -96,18 +96,15 @@ name_manager::update_secondary_hash (name_t &name)
     auto hash       = compute_hash_code (chopped_id);
     auto &bucket    = chop_hash_bucket [hash];
 
-    if (on_id_conflict)
+    bucket.for_each([this, chopped_id](name_t &old_name)
     {
-        bucket.for_each([this, chopped_id](name_t &old_name)
+        chopped_id_t buf;
+        auto id = old_name.content ();
+        if (chop_id (id, buf) == chopped_id)
         {
-            chopped_id_t buf;
-            auto id = old_name.content ();
-            if (chop_id (id, buf) == chopped_id)
-            {
-                on_id_conflict (id);
-            }
-        });
-    }
+            diagnose.on_id_conflict (id);
+        }
+    });
 
     bucket.prepend(name);
 }
@@ -130,7 +127,7 @@ name_manager::double_definition_error (name_t &name, ilk_value new_ilk)
     {
         if (new_ilk == numeric)  // We don't allow numeric macros to be defined after their first use
         {
-            if (on_already_appeared) { on_already_appeared (); }
+            diagnose.on_already_appeared ();
 
             // nevertheless we will treat it as numeric from now on
             // numeric macros are not stored in secondary hash table
@@ -142,7 +139,7 @@ name_manager::double_definition_error (name_t &name, ilk_value new_ilk)
     }
     else
     {
-        if (on_defined_before) { on_defined_before (); }
+        diagnose.on_defined_before ();
     }
 }
 
@@ -188,7 +185,7 @@ name_manager::lookup_module (std::u8string_view module_name) -> name_t &
             return *current_node; 
         
         default:
-            if (on_incompatible) { on_incompatible (); }
+            diagnose.on_incompatible ();
             return storage.record_0();
         }        
     }
@@ -242,11 +239,11 @@ name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
 
     if (count == 0)
     {
-        if (on_no_match) { on_no_match (); }
+        diagnose.on_no_match ();
     }
     else if (count > 1)
     {
-        if (on_too_many_matches) { on_too_many_matches (); } 
+        diagnose.on_too_many_matches (); 
     }
 
     return result ? *result : storage.record_0();

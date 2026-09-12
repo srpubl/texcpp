@@ -65,6 +65,9 @@ out_processor::commit_accumulator_if_necessary (bool needs_commit_when_sign_val_
         commit_accumulator ();
         state = num_or_id;
         break;
+    
+    default:
+        break;    
     }
 }
 
@@ -178,10 +181,7 @@ out_processor::process_value (int value)
     case sign_val:
         state = sign_val_sign_val;
         pending_addend   = value;
-        if (on_missing_sign_between_numbers)
-        {
-            on_missing_sign_between_numbers ();
-        }
+        diagnose.on_missing_sign_between_numbers ();
         return;
 
     case sign_val_sign:
@@ -192,10 +192,7 @@ out_processor::process_value (int value)
     case sign_val_sign_val:
         accumulator += pending_addend;
         pending_addend = value;
-        if (on_missing_sign_between_numbers)
-        {
-            on_missing_sign_between_numbers ();
-        }
+        diagnose.on_missing_sign_between_numbers ();
         return;
 
     default: 

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <string_view>
 #include <vector>
 
@@ -36,8 +38,6 @@ struct output_state
 
 }
 
-// section 79
-
 // TODO: Move to right place
 constexpr auto param         = char8_t {0x00};
 constexpr auto number        = 0x80;  /// code returned by get_output when next output is numeric
@@ -47,7 +47,7 @@ constexpr auto identifier    = 0x82;  /// code returned by get_output for identi
 class output_token_stream 
 {
 public:
-    struct error_handlers 
+    struct diagnostics 
     {
         virtual void on_missing_parameter (std::u8string_view) = 0;
         virtual void on_name_not_found (std::u8string_view) = 0;
@@ -58,7 +58,7 @@ public:
 private:
     name_manager &name_mgr;
     text_manager &text_mgr;
-    error_handlers &err;
+    diagnostics &diagnose;
 
     std::vector <internal::output_state>
     stack;
@@ -68,8 +68,8 @@ private:
     auto & cur_state () { return stack.back(); }
 
 public:
-    output_token_stream (name_manager &name_mgr, text_manager &text_mgr, error_handlers &err)
-    : name_mgr (name_mgr), text_mgr (text_mgr), err (err)
+    output_token_stream (name_manager &name_mgr, text_manager &text_mgr, diagnostics &diagnose)
+    : name_mgr (name_mgr), text_mgr (text_mgr), diagnose (diagnose)
     {
         stack.reserve (config::stack_size);
     }
@@ -95,7 +95,7 @@ private:
     push_level (name_t const &name)
     {
         if (stack.size () == stack.capacity())
-            err.on_stack_overflow();
+            diagnose.on_stack_overflow();
 
         stack.emplace_back (name);
     }

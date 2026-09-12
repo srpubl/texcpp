@@ -7,9 +7,6 @@
 
 #include "character.h"
 
-using on_new_line_t      = void (*) (int line);
-using on_line_truncated_t = void (*) ();
-
 /// Writes value backwards into a buffer starting from (the byte before) end
 /// Returns the start of the string, anchored at the tail of the buffer
 /// Caller must make sure that value is not negative and that buffer is large enough
@@ -34,6 +31,14 @@ write (pascal::text_file &file, ascii_code_t c)
 
 class out_buffer
 {
+public:
+    struct diagnostics 
+    {
+        virtual void on_new_line (int line) = 0;
+        virtual void on_line_truncated () = 0;
+    };
+
+private:
     std::vector<ascii_code_t> buffer = {};
     pascal::text_file        &pascal_file;
     size_t                    break_index      = 0; /// last breaking place in out_buf
@@ -42,25 +47,16 @@ class out_buffer
     int                       line_length      = 0;
     int                       line             = 1;
 
-    on_new_line_t             on_new_line      = nullptr;
-    on_line_truncated_t       on_line_truncated = nullptr;
+    diagnostics &diagnose;
 
   public:
-    out_buffer (int line_length, pascal::text_file &pascal_file)
-        : line_length (line_length), pascal_file (pascal_file)
+    out_buffer (int line_length, pascal::text_file &pascal_file, diagnostics &diagnose)
+        : line_length (line_length), pascal_file (pascal_file), diagnose (diagnose)
     { buffer.reserve (2 * line_length); }
 
     int
     current_line ()
     { return line; }
-
-    void
-    set_on_new_line (on_new_line_t f)
-    { on_new_line = f; }
-
-    void
-    set_on_line_truncated (on_line_truncated_t f)
-    { on_line_truncated = f; }
 
     void
     append (ascii_code_t ch)

@@ -4,6 +4,8 @@
 #include <print>
 #include <utility>
 
+#include "character.h"
+
 class terminal
 {
     std::FILE *stream = stdout;
@@ -32,10 +34,19 @@ public:
     print (std::string_view str)
     { std::print (stream, "{}", str); }
 
-    // Special version because this case happens so often
+    // Special version because this case happens so often: system-character type
     inline void
     print (char ch)
     { std::fputc (ch, stream); }
+
+    // Special version because this case happens so often: ASCII
+    void
+    print (char8_t c)
+    { print (convert_to_output (c)); }
+
+    void
+    print (std::u8string_view str)
+    { for (auto ch : str) { print (ch); }}
 
     template <typename... Args>
     inline void
