@@ -1,4 +1,5 @@
 #include "output_token_stream.h"
+#include "tokens.h"
 
 char32_t
 output_token_stream::get_output ()

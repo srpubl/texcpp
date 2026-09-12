@@ -38,8 +38,6 @@ struct output_state
 
 }
 
-// TODO: Move to right place
-constexpr auto param         = char8_t {0x00};
 constexpr auto number        = 0x80;  /// code returned by get_output when next output is numeric
 constexpr auto module_number = 0x81;  /// code returned by get_output for module numbers
 constexpr auto identifier    = 0x82;  /// code returned by get_output for identifiers
@@ -89,6 +87,9 @@ public:
     /// additional information corresponding to output token
     int
     extra () { return _extra; }
+
+    std::u8string_view
+    extra_identifier () { return name_mgr.name_at (_extra).content(); }
 
 private:
     void

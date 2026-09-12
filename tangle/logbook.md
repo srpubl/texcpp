@@ -496,7 +496,9 @@ for further simplifications of logic.
 We also remove `cur_repl_text` as this is just the (new) return value from `scan_repl` used locally
 after a call to that function.  
 
-## Output token stream
+## Output token processing 
+
+### Output token stream
 
 We add three convenience methods to `output_state` but leave its members openly accessible because it
 will be used only from within the output token stream (and thus just has data type semantics). We then
@@ -521,3 +523,27 @@ handlers have been set.
 
 We are finally in a position where we can move all of this code into new header and implementation
 files. There, we also replace `stack` and `stack_ptr` with a `std::vector`.
+
+As a little detour we separate all error messages into new diagnosis classes (which were called 
+`error_handlers` before ) to reduce the amount of initialization code and checks. Instead of separate 
+callbacks, we just use one `diagnosis` object per class. However, if the class depends on the result
+of a callback (such as `on_add_string`), we keep the callback separate, as it is not a callback for
+purely diagnostic reasons.
+
+### Output token reducer
+
+We identify a set of functions that are all used for translating the output tokens into the primitives
+that `out_processor` understands, i.e., they reduce the tokens to primitives. They are the mostly the
+`send_out_*` family of functions with some helper functions. 
+
+We put them into a new class `output_token_reducer`, which has a very small interface: `send_the_output`
+and `brace_level` (and constructor and initializer) with references to `out_processor` and 
+`output_token_stream` (and `pool_check_sum`, which later will quite likely become a reference to a class
+taking care of the string pool).
+
+It turns out that no one else needs the `out_processor`, so we could actually directly instantiate it in
+here. We don't do it because the instance requires diagnostics and a buffer, both of which we neither 
+want to instantiate ourselves nor pass on. We leave construction of the system to the main code.
+
+
+
