@@ -20,7 +20,7 @@ public:
 private:
     output_token_stream &output_token_str;
     out_processor &out_proc;
-    int &pool_check_sum;
+    int const &pool_check_sum;
     diagnostics &diagnose;
 
     /// returns next token after macro expansion
@@ -33,7 +33,7 @@ public:
     output_token_reducer (
         output_token_stream &output_token_str, 
         out_processor &out_proc, 
-        int &pool_check_sum,
+        int const &pool_check_sum,
         diagnostics &diagnose)
     : output_token_str (output_token_str)
     , out_proc (out_proc)

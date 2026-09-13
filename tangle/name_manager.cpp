@@ -8,7 +8,7 @@
 using chopped_id_t = std::array<char8_t, config::unambig_length + 1>;
 
 static auto
-compute_hash_code (std::u8string_view id) -> index_t
+compute_hash_code (std::u8string_view id)
 {
     auto h = id [0];
     id.remove_prefix (1);
@@ -19,7 +19,7 @@ compute_hash_code (std::u8string_view id) -> index_t
 static auto
 chop_id (std::u8string_view id, chopped_id_t &chopped_id)
 {
-    index_t length = 0;
+    config::index_t length = 0;
     for (auto ch : id)
     {
         if (length == config::unambig_length)
@@ -186,7 +186,7 @@ name_manager::lookup_module (std::u8string_view module_name) -> name_t &
         
         default:
             diagnose.on_incompatible ();
-            return storage.record_0();
+            return no_name ();
         }        
     }
 
@@ -246,6 +246,6 @@ name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
         diagnose.on_too_many_matches (); 
     }
 
-    return result ? *result : storage.record_0();
+    return result ? *result : no_name ();
 }
 

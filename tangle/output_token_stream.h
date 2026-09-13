@@ -75,7 +75,7 @@ public:
     void
     initialize ()
     {
-        stack.emplace_back (text_mgr.storage.record_0 ().continuation ());
+        stack.emplace_back (text_mgr.root ().continuation ());
     }
 
     char32_t
@@ -105,13 +105,14 @@ private:
     pop_level ()
     {
         auto continuation = cur_state().replacement -> continuation ();
-        if (continuation == &text_mgr.storage.record_0 ())  // end of macro expansion
+
+        if (continuation == &text_mgr.root ())  // end of macro expansion
         {
             if (cur_state().name -> ilk() == parametric)
             {
                 // pop parameter stack
                 name_mgr.remove_last();
-                text_mgr.storage.remove_last();
+                text_mgr.remove_last();
             }
         }
         else if (continuation)

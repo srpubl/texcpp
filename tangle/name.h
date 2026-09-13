@@ -42,12 +42,24 @@ public:
     auto number ()           const             { return _equiv.number - 0x10000; }
     auto replacement_text () const             { return _equiv.repl_text; }
 
-    auto set_link             (name_t * value) { this->_llink = value; }
-    auto set_llink            (name_t * value) { this->_llink = value; }
-    auto set_rlink            (name_t * value) { this->_rlink = value; }
-    auto set_chop_link        (name_t * value) { this->_rlink = value; }
-    auto set_ilk              (ilk_value value){ this->_ilk = value; }
-    auto set_number           (int32_t value)  { this->_equiv.number = value + 0x10000; }
-    auto set_replacement_text (text_t * value) { this->_equiv.repl_text = value; }
+    void set_link             (name_t * value) { this->_llink = value; }
+    void set_llink            (name_t * value) { this->_llink = value; }
+    void set_rlink            (name_t * value) { this->_rlink = value; }
+    void set_chop_link        (name_t * value) { this->_rlink = value; }
+    void set_ilk              (ilk_value value){ this->_ilk = value; }
+    void set_number           (int32_t value)  { this->_equiv.number = value + 0x10000; }
+    void set_replacement_text (text_t &value) { this->_equiv.repl_text = &value; }
+
+    void add_replacement_text (text_t &text) 
+    {
+        if (replacement_text())
+        {
+            replacement_text () -> append_continuation (text);
+        }
+        else
+        {
+            set_replacement_text (text);
+        }
+    }
 };
 

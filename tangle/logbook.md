@@ -538,12 +538,21 @@ that `out_processor` understands, i.e., they reduce the tokens to primitives. Th
 
 We put them into a new class `output_token_reducer`, which has a very small interface: `send_the_output`
 and `brace_level` (and constructor and initializer) with references to `out_processor` and 
-`output_token_stream` (and `pool_check_sum`, which later will quite likely become a reference to a class
-taking care of the string pool).
+`output_token_stream` (and `pool_check_sum`, which will become a reference to a class taking care of the 
+string pool).
 
 It turns out that no one else needs the `out_processor`, so we could actually directly instantiate it in
 here. We don't do it because the instance requires diagnostics and a buffer, both of which we neither 
 want to instantiate ourselves nor pass on. We leave construction of the system to the main code.
+
+## String Pool
+
+This is a small class that we extract from `add_to_string_pool` and small related helper functions and
+state variables. Note that we move the pool file handle into this class as well as it only ever is used
+in here. We then to a similar thing with `out_buf` and `pascal_file`. 
+
+With some more little adjustments around the code, we have finished separating the entire output out of
+the main file into their own classes. The interfaces are rather small indicating low coupling.
 
 
 

@@ -1,11 +1,9 @@
 #include <algorithm>
-#include <array>
 #include <climits>
 #include <cstdint>
 #include <cstring>
 #include <print>
 #include <string_view>
-#include <vector>
 
 #include "diagnostics/output_token_reducer_diagnostics.h"
 #include "output_token_reducer.h"
@@ -23,6 +21,7 @@
 #include "out_buffer.h"
 #include "out_processor.h"
 #include "output_token_stream.h"
+#include "string_pool.h"
 #include "tangle.h"
 #include "terminal.h"
 #include "text_manager.h"
@@ -32,6 +31,7 @@
 #include "diagnostics/out_processor_diagnostics.h"
 #include "diagnostics/out_buffer_diagnostics.h"
 #include "diagnostics/output_token_stream_diagnostics.h"
+#include "diagnostics/string_pool_diagnostics.h"
 
 
 static_assert (CHAR_BIT == 8, "Error: This codebase strictly requires an 8-bit char architecture");
@@ -72,17 +72,7 @@ open_input ()
 }
 
 // section 25
-pascal::text_file pascal_file;
-pascal::text_file pool;
-
 // section 26
-void
-open_output ()
-{
-    pascal_file.rewrite ();
-    pool.rewrite ();
-}
-
 // section 27
 using buf_index_t = pascal::int_range<0, config::buf_size>;
 auto buffer       = pascal::array<buf_index_t, ascii_code_t> {};  /// The input line buffer. Holds valid
@@ -175,7 +165,7 @@ print_error_location_input (terminal &term)
 // section 33
 
 auto out_buf_diag = out_buffer_diagnostics {term, err};
-auto out_buf = out_buffer {config::line_length, pascal_file, out_buf_diag};
+auto out_buf = out_buffer {config::line_length, out_buf_diag};
 
 void
 print_error_location_output (terminal &term)
@@ -189,19 +179,14 @@ print_error_location_output (terminal &term)
 // section 35
 // section 36
 // section 37
-// We use uint8_t and uint16_t instead of eight_bits and sixteen_bits
 // section 38
 
-using index_t         = config::index_t;  /// used to store indices in arrays
+using index_t = config::index_t;  /// used to store indices in arrays
 
 text_manager text_mgr;
 
 // section 39
 // section 40
-
-auto string_ptr     = index_t {256};  /// next number to be given to a string of length > 1
-int  pool_check_sum = 271828;         /// sort of a hash for the whole string pool
-
 // section 41, 42, 43 not required (global arrays are zero-initialized in C++),
 // other initializers already given in section 40
 
@@ -230,41 +215,8 @@ auto current_id       = std::u8string_view {};
 // section 63
 // section 64
 
-constexpr auto checksum_prime = (1 << 29) - 73;
-
-void
-add_to_checksum (int value)
-{
-    pool_check_sum += pool_check_sum + value;
-    while (pool_check_sum > checksum_prime) { pool_check_sum -= checksum_prime; }
-}
-
-void
-add_string_to_pool (std::u8string_view id, size_t actual_length)
-{
-    // output length
-    write (pool, u8'0' + actual_length / 10);
-    write (pool, u8'0' + actual_length % 10);
-
-    add_to_checksum (actual_length);
-
-    bool skip_one = true;  // skip first element and every doubled " or @
-    for (auto ch : id)
-    {
-        if (skip_one)
-        {
-            skip_one = false;
-            continue;
-        }
-        write (pool, ch);
-        add_to_checksum (ch);
-        if (ch == u8'"' || ch == u8'@')
-        {
-            skip_one = true;
-        }
-    }
-    pool.write_line ();
-}
+auto str_pool_diag = string_pool_diagnostics {term, err};
+auto str_pool = string_pool {str_pool_diag};
 
 auto
 on_add_string (std::u8string_view id) -> index_t
@@ -273,14 +225,8 @@ on_add_string (std::u8string_view id) -> index_t
         return id [1];
 
     auto length = id.length () - (double_chars + 1_r);
-    if (length > 99)
-    {
-        err.err_print ("! Preprocessed string is too long");
-    }
 
-    add_string_to_pool (id, length);
-
-    return string_ptr++;
+    return str_pool.add (id, length);
 }
 
 auto name_mgr_diag = name_manager_diagnostics {err};
@@ -298,9 +244,6 @@ auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name
 // section 68
 // section 69
 // section 70
-
-text_t *last_unnamed = &text_mgr.storage.record_0();  /// most recent replacement text of unnamed module
-
 // section 71 not required
 
 // section 73
@@ -314,20 +257,13 @@ auto output_token_str      = output_token_stream {name_mgr, text_mgr, output_tok
 auto out_proc_diag         = out_processor_diagnostics {err};
 auto out_proc              = out_processor {out_buf, out_proc_diag};
 auto output_token_red_diag = output_token_reducer_diagnostics {err};
-auto output_token_red      = output_token_reducer {output_token_str, out_proc, pool_check_sum, output_token_red_diag};
+auto output_token_red      = output_token_reducer {
+    output_token_str, out_proc, str_pool.check_sum(), output_token_red_diag};
 
 /// section 80
 // section 81 nothing tbd
 // section 82
 // section 83
-
-void
-initialize_output_stacks ()
-{
-    output_token_str.initialize();
-    output_token_red.initialize ();
-}
-
 // section 84
 // section 85
 // section 86
@@ -355,7 +291,7 @@ initialize_output_stacks ()
 void
 output_compressed_tables (terminal &term)
 {
-    if (!text_mgr.storage.record_0().continuation())
+    if (!text_mgr.root ().continuation ())
     {
         err.terminal ().print_nl ("! No output was specified.");
         err.mark_harmless ();
@@ -364,9 +300,12 @@ output_compressed_tables (terminal &term)
 
     term.print_nl ("Writing the output file");
     term.update ();
-    initialize_output_stacks ();
+
+    output_token_str.initialize();
+    output_token_red.initialize ();
     output_token_red.send_the_output ();
     out_buf.flush_last_line ();
+
     auto brace_level = output_token_red.brace_level ();
     if (brace_level != 0)
     {
@@ -380,7 +319,6 @@ output_compressed_tables (terminal &term)
 
 // section 124
 
-int ii;
 int other_line = 0;
 // int temp_line; // not needed because we use std::swap
 bool input_has_ended;
@@ -696,7 +634,7 @@ constexpr auto begin_pascal = ascii_code_t {0x86};  /// control code for ‘@p�
 constexpr auto module_name  = ascii_code_t {0x87};  /// control code for ‘@<’
 constexpr auto new_module   = ascii_code_t {0x88};  /// control code for ‘@ ’ and ‘@*’
 
-// Declared in module 171 what needed here already
+// Declared in module 171 but needed here already
 int module_count;
 
 ascii_code_t
@@ -827,7 +765,7 @@ skip_comment ()
 // section 143, 144
 
 /// name of module just scanned
-name_t * cur_module;
+name_t * cur_module_name;
 bool    scanning_hex = false;  /// are we scanning a hexadecimal constant
 
 // section 145 - 155
@@ -1039,11 +977,11 @@ scan_module_name ()
     {
         if (mod_text [k] == u8'.' && mod_text [k - 1_r] == u8'.' && mod_text [k - 2_r] == u8'.')
         {
-            cur_module = &name_mgr.lookup_prefix ({&mod_text[1_r], static_cast <size_t> (k) - 3});
+            cur_module_name = &name_mgr.lookup_prefix ({&mod_text[1_r], static_cast <size_t> (k) - 3});
         }
         else
         {
-            cur_module = &name_mgr.lookup_module ({&mod_text [1_r], k});
+            cur_module_name = &name_mgr.lookup_module ({&mod_text [1_r], k});
         }
     }
 }
@@ -1320,7 +1258,7 @@ scan_replacement (uint8_t type)
         case module_name:
             if (type == module_name)
             {
-                text_mgr.append_to_next_new (0xA800 + name_mgr.index_of (*cur_module));
+                text_mgr.append_to_next_new (0xA800 + name_mgr.index_of (*cur_module_name));
                 break;
             }
             done = true;
@@ -1355,7 +1293,7 @@ scan_replacement (uint8_t type)
     next_control = a & 0xFF;
     ensure_parantheses_balance (balance);
 
-    return text_mgr.storage.add_next_new ();
+    return text_mgr.add_next_new ();
 }
 
 // section 166
@@ -1476,8 +1414,8 @@ define_macro (ilk_value type)
 {
     auto &name = name_mgr.lookup (type, current_id);
     auto &replacement_text = scan_replacement (type);
-    name.set_replacement_text (&replacement_text);
-    replacement_text.set_continuation (&text_mgr.storage.record_0());
+    name.set_replacement_text (replacement_text);
+    replacement_text.set_continuation (&text_mgr.root());
 }
 
 // section 171 nothing tbd
@@ -1568,12 +1506,12 @@ scan_definition_part ()
 void
 scan_pascal_part ()
 {
-    name_t * p = nullptr;
+    name_t * scanned_module_name = &name_mgr.no_name();
     switch (next_control)
     {
     case begin_pascal: break;
     case module_name:
-        p = cur_module;
+        scanned_module_name = cur_module_name;
 
         do { next_control = get_next (); }
         while (next_control == u8'+');
@@ -1595,20 +1533,14 @@ scan_pascal_part ()
     auto &replacement_text = scan_replacement (module_name);
     replacement_text.set_continuation (nullptr);  // mark this replacement text as nonmacro
 
-    if (!p)  // unnamed module
+    if (scanned_module_name == &name_mgr.no_name ())
     {
-        last_unnamed->set_continuation (&replacement_text);
-        last_unnamed = &replacement_text;
+        text_mgr.add_unnamed (replacement_text);
     }
-    else if (p -> replacement_text())
+    else 
     {
-        p -> replacement_text () -> append_continuation (replacement_text);
+        scanned_module_name -> add_replacement_text (replacement_text);
     }
-    else
-    {
-        p -> set_replacement_text (&replacement_text);
-    }
-
 }
 
 // section 179, 180, 181: debugging, left out for now
@@ -1616,30 +1548,26 @@ scan_pascal_part ()
 // section 182
 
 void
-initialize ()
+initialize (std::filesystem::path const &pascal_file_name, std::filesystem::path const &pool_file_name)
 {
     // section 10
     // section 14, 17
     // section 18
     // section 21 nothing tbd
-
     // section 26
-    open_output ();
+
+    out_buf.initialize (pascal_file_name);
+    str_pool.initialize (pool_file_name);
 
     // section 42
-    name_mgr.initialize(config::max_bytes, config::max_names);
-    text_mgr.initialize(config::max_toks, config::max_texts);
+    name_mgr.initialize (config::max_bytes, config::max_names);
+    text_mgr.initialize (config::max_toks, config::max_texts);
 
-    string_ptr     = 256_r;
-    pool_check_sum = 271828;
 
     // section 46
     // section 48
     // section 52
     // section 71
-    last_unnamed    = &text_mgr.storage.record_0();
-    text_mgr.storage.record_0 ().set_continuation (&text_mgr.storage.record_0 ());
-
     // section 144
     scanning_hex = false;
 
@@ -1659,10 +1587,8 @@ tangle (
 {
     web_file.assign (web_file_name);
     change_file.assign (change_file_name);
-    pascal_file.assign (pascal_file_name);
-    pool.assign (pool_file_name);
         
-    initialize ();
+    initialize (pascal_file_name, pool_file_name);
     initialize_input_system ();
     term.print_ln ("{}", config::banner);
 
@@ -1678,21 +1604,10 @@ tangle (
     err.set_print_error_location (print_error_location_output);
 
     output_compressed_tables (term);
-    if (string_ptr > 256)
-    {
-        term.print_nl ("{} strings written to string pool file.", string_ptr - 256);
-        pool.write ('*');
-
-        char digit_buffer [config::max_digits];
-        std::to_chars (digit_buffer, std::end (digit_buffer), pool_check_sum);
-        for (size_t i = 0; i < 9; ++i) { write (pool, digit_buffer [i]); }
-        pool.write_line ();
-    }
-
+    str_pool.finalize ();
+    out_buf.finalize ();
     web_file.close ();
     change_file.close ();
-    pascal_file.close ();
-    pool.close ();
 
     return err.exit_code ();
 }

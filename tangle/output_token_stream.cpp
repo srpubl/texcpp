@@ -84,9 +84,9 @@ output_token_stream::push_parametric (name_t const &name)
 
     copy_parameter_to_text_mgr ();
 
-    auto &new_text = text_mgr.storage.add_next_new ();
-    new_text.set_continuation (&text_mgr.storage.record_0 ());
-    name_mgr.add_simple (&new_text);
+    auto &new_text = text_mgr.add_next_new ();
+    new_text.set_continuation (&text_mgr.root ());
+    name_mgr.add_simple (new_text);
 
     push_level (name);
 }

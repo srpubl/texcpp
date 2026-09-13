@@ -9,9 +9,7 @@
 #include "utility/string_storage.h"
 #include "name.h"
 
-using index_t = uint32_t;
-
-using on_add_string_t = index_t (*) (std::u8string_view id);
+using on_add_string_t = config::index_t (*) (std::u8string_view id);
 
 using hash_bucket_name_t_link = util::hash_bucket<name_t, &name_t::link, &name_t::set_link>;
 using hash_bucket_name_t_chop_link = util::hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;
@@ -37,7 +35,7 @@ public:
 
 private:
     diagnostics &diagnose;
-    on_add_string_t on_add_string = nullptr;
+    on_add_string_t on_add_string;
 
     util::string_storage <name_t> storage;
     std::array<hash_bucket_name_t_link, config::hash_size> hash_bucket = {};
@@ -62,7 +60,7 @@ public:
     lookup_prefix (std::u8string_view module_name) -> name_t &;
 
     void
-    add_simple (text_t * replacement_text)
+    add_simple (text_t &replacement_text)
     {
         using namespace std::literals;
         auto &new_name = storage.add(u8""sv);
@@ -71,12 +69,15 @@ public:
     }
 
     constexpr auto 
-    index_of (name_t const &name) const -> index_t
+    index_of (name_t const &name) const
     { return storage.index_of(name); }
 
     auto const &
-    name_at (index_t index) const
+    name_at (config::index_t index) const
     { return storage.record_at(index); }
+
+    constexpr auto &
+    no_name () { return storage.record_0 (); }
 
     constexpr auto &
     last () const { return storage.last (); }

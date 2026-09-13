@@ -40,7 +40,7 @@ public:
 
 private:
     std::vector<ascii_code_t> buffer = {};
-    pascal::text_file        &pascal_file;
+    pascal::text_file         pascal_file;
     size_t                    break_index      = 0; /// last breaking place in out_buf
     size_t                    semi_index       = 0; /// last semicolon breaking place in out_buf
 
@@ -50,9 +50,20 @@ private:
     diagnostics &diagnose;
 
   public:
-    out_buffer (int line_length, pascal::text_file &pascal_file, diagnostics &diagnose)
-        : line_length (line_length), pascal_file (pascal_file), diagnose (diagnose)
+    out_buffer (int line_length, diagnostics &diagnose)
+        : line_length (line_length), diagnose (diagnose)
     { buffer.reserve (2 * line_length); }
+
+    void
+    initialize (std::filesystem::path const &path) 
+    {
+        pascal_file.assign (path);
+        pascal_file.rewrite ();
+    }
+
+    void
+    finalize ()
+    {   pascal_file.close (); }
 
     int
     current_line ()
