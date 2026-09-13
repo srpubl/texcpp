@@ -31,7 +31,7 @@ public:
     auto &check_sum () const { return _check_sum; } 
 
     void initialize (std::filesystem::path const &pool_file_name);
-    auto add (std::u8string_view str, size_t actual_length);
+    auto add (std::u8string_view str, size_t actual_length) -> config::index_t;
     void finalize ();
 
 private:

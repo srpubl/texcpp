@@ -1,4 +1,5 @@
 #include "string_pool.h"
+#include "config.h"
 
 void
 string_pool::initialize (std::filesystem::path const &pool_file_name)
@@ -11,7 +12,7 @@ string_pool::initialize (std::filesystem::path const &pool_file_name)
 
 
 auto
-string_pool::add (std::u8string_view str, size_t actual_length)
+string_pool::add (std::u8string_view str, size_t actual_length) -> config::index_t
 {
     if (actual_length > 99)
     {
