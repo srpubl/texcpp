@@ -554,5 +554,73 @@ in here. We then to a similar thing with `out_buf` and `pascal_file`.
 With some more little adjustments around the code, we have finished separating the entire output out of
 the main file into their own classes. The interfaces are rather small indicating low coupling.
 
+## Input System
+
+Analogously to `out_buffer`, we will introduce a class `in_buffer`, which will primarily encompass the
+state defined by `buffer`, `limit`, and `loc`. The idea is to use a `std::vector` as base for `buffer`
+such that `limit` is somewhat related to its `size`.
+
+### `util::static_vector`
+
+We use the opportunity to make our usage of `std::vector` a little bit faster. So far, we always checked
+if the capacity of the vector would be exceeded before calling `push_back` or `insert`. Those functions
+however perform the exact same check. To save the double check, we use a custom allocator that wraps
+around `std::allocator`. We call it `util::one_time_allocator` because its `allocate` calls 
+`std::allocator::allocator` exactly once and throws a `std::bad_alloc` on subsequent calls. In this way,
+whenever a vector would want to reallocate, we get notified. Otherwise, for allocations within the 
+limits of the buffer, there is no overhead at all. We can thus remove our own checks. The performance
+gains are measurable (5 to 10% of total runtime). Our `util::static_vector` is just `std::vector` with
+our `one_time_allocator`.
+
+### Meaning of `limit`
+
+`buffer` contains the current line as read from the file but sometimes an additional character is 
+appended at the end. The longest possible line is `config::buf_size - 1` (as defined in `input_ln`) but 
+the buffer is 2 characters longer, i.e. ranging from 0 to `config::buf_size`  (instead of 
+`config::buf_size - 2`).
+
+After `input_ln` has read the next line into `buffer`, `limit` contains the number of characters in this
+line, i.e., the first valid character is at `buffer [0]` and the last at `buffer [limit - 1]`. Note that 
+in case a line ends with spaces all of them are getting removed as if they had not been there.
+
+`get_line` sets a space at `buffer [limit]` to ensure separation of tokens across lines. Within 
+`skip_ahead` and `copy_verbatim_from_buffer_to_text_mgr`, there is a temporary marker `@` at 
+`buffer [limit + 1]` that is only required within the respective function. In 
+`copy_string_from_buffer_to_text_mgr`, `buffer [limit]` is set to `'` and `buffer [limit + 1]` to 0 in
+case the string to be copied wasn't closed properly.
+
+### `buffer` as `static_vector`
+
+To account for these two extra characters, we define `buffer` to be 2 characters larger at the end. That
+is, we need to ensure that `buffer` grows and shrinks dynamically (while its capacity stays fixed). To
+this end, we first add `buffer.resize (limit + 2)` calls wherever `limit` is assigned to: in `input_ln`,
+`read_from_change_file`, and `check_read_all_changes`. 
+
+We can then convert `limit` into a function that returns `buffer.size () - 2`. We need to replace all 
+reads from `limit` with `limit ()` and to delete all writes to it. Note that within `input_ln` we need
+to use a local variable `limit` as we're building up the line in memory and cannot use the fact that 
+`limit` is already `size () - 2`. Also, we need to increase `buffer` dynamically with `push_back` for 
+every character.
+
+### Class `input_line_buffer`
+
+We now introduce class `input_line_buffer`, which privately inherits from `static_vector`. We could have
+it as a member but in this way we save a bit of typing. The only member from the base class we actually 
+make accessible directly is `operator []`. `input_ln` becomes the method `read_line_from` and builds up 
+the line. 
+
+All other methods are very thin wrappers ensuring the class invariant that `limit` is always `size - 2`
+or providing better semantics. For instance, `pad_end` and `mark_end` allow to access the two bytes 
+after `limit`.
 
 
+### Class `in_stream`
+
+This class contains a member `input_line_buffer buffer` and `loc`. All methods are very simple but
+increase readibility of the code massively. Instead of using `loc` in 70 places, we now write `peek`
+or `advance` etc. Naming has been adapted to typical stream / compiler lingo.
+
+In addition, we merge `change_buffer` and `change_limit` into another instance of `input_line_buffer`
+but leave them outside of `in_stream`.
+
+We then add the diagnostics class to `in_stream` as usual.

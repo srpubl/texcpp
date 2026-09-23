@@ -10,7 +10,7 @@ out_buffer::flush_line ()
         break_index = semi_index;
     }
 
-    for (auto k = buffer.begin (); k < buffer.begin () + break_index; ++k) { write (pascal_file, *k); }
+    for (auto k = buffer.begin (); k < buffer.begin () + break_index; ++k) { write (*k); }
     pascal_file.write_line ();
     
     ++line;

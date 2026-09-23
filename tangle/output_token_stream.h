@@ -1,7 +1,8 @@
 #pragma once
 
 #include <string_view>
-#include <vector>
+
+#include "utility/static_vector.h"
 
 #include "config.h"
 #include "name_manager.h"
@@ -58,7 +59,7 @@ private:
     text_manager &text_mgr;
     diagnostics &diagnose;
 
-    std::vector <internal::output_state>
+    util::static_vector <internal::output_state>
     stack;
 
     int _extra;
@@ -95,10 +96,14 @@ private:
     void
     push_level (name_t const &name)
     {
-        if (stack.size () == stack.capacity())
+        try 
+        {
+            stack.emplace_back (name);
+        }
+        catch (std::bad_alloc)
+        {
             diagnose.on_stack_overflow();
-
-        stack.emplace_back (name);
+        }
     }
 
     void

@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <new>
 #include <stdexcept>
 #include <string_view>
-#include <vector>
+#include "utility/static_vector.h"
 
 namespace util
 {
@@ -21,8 +22,8 @@ public:
     using index_t = Index_T;
 
 private:
-    std::vector <char_type> chars = {};
-    std::vector <record_type> records = {};
+    util::static_vector <char_type> chars = {};
+    util::static_vector <record_type> records = {};
 
 public:
     void
@@ -59,18 +60,17 @@ private:
     next_new ()
     { return records.back (); }
 
-    constexpr void
-    check_size_of_chars (index_t count) const
+    void
+    emplace_record ()
     {
-        if (chars.size () + count > chars.capacity ())
-            throw std::length_error (descriptive_type_name <char_type>);
-    }
-
-    constexpr void
-    check_size_of_records () const
-    {
-        if (records.size () >= records.capacity ())
+        try 
+        {
+            records.emplace_back (chars.data () + chars.size ());
+        }
+        catch (std::bad_alloc)
+        {
             throw std::length_error (descriptive_type_name <record_type>);
+        }
     }
 
 
@@ -78,38 +78,43 @@ public:
     void
     append_to_next_new (char_type c)
     {
-        check_size_of_chars (1);
-        chars.push_back (c);
+        try
+        {
+            chars.push_back (c);
+        }
+        catch (std::bad_alloc)
+        {
+            throw std::length_error (descriptive_type_name <char_type>);
+        }
     }
 
     void
     append_to_next_new (string_view str)
     {
-        check_size_of_chars (str.length ());
-        chars.insert (chars.end (), str.begin (), str.end ());
+        try
+        {
+            chars.insert (chars.end (), str.begin (), str.end ());
+        }
+        catch (std::bad_alloc)
+        {
+            throw std::length_error (descriptive_type_name <char_type>);
+        }
     }
 
     record_type &
     add_next_new ()
     {
-        check_size_of_records();
-
         auto &new_record = next_new ();
-        records.emplace_back (chars.data () + chars.size ());
+        emplace_record ();
         return new_record;
     }
 
     record_type &
     add (string_view id)
     {
-        check_size_of_chars (id.length ());
-        check_size_of_records();
-
         auto &new_record = next_new ();
-
-        chars.insert (chars.end (), id.begin (), id.end ());
-        records.emplace_back (chars.data () + chars.size ());
-
+        append_to_next_new (id);
+        emplace_record ();
         return new_record;
     }
 

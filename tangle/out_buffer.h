@@ -1,9 +1,9 @@
 #pragma once
 
 #include <string_view>
-#include <vector>
 
 #include "pascal/text_file.h"
+#include "utility/static_vector.h"
 
 #include "character.h"
 
@@ -24,11 +24,6 @@ to_chars (ascii_code_t *end, int value) noexcept
     return end;
 }
 
-inline void
-write (pascal::text_file &file, ascii_code_t c)
-{ file.write (convert_to_output (c)); }
-
-
 class out_buffer
 {
 public:
@@ -39,7 +34,7 @@ public:
     };
 
 private:
-    std::vector<ascii_code_t> buffer = {};
+    util::static_vector <char8_t> buffer = {};
     pascal::text_file         pascal_file;
     size_t                    break_index      = 0; /// last breaking place in out_buf
     size_t                    semi_index       = 0; /// last semicolon breaking place in out_buf
@@ -49,7 +44,11 @@ private:
 
     diagnostics &diagnose;
 
-  public:
+    void
+    write (char8_t c)
+    { pascal_file.write (convert_to_output (c)); }
+
+public:
     out_buffer (int line_length, diagnostics &diagnose)
         : line_length (line_length), diagnose (diagnose)
     { buffer.reserve (2 * line_length); }
