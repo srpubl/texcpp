@@ -3,12 +3,9 @@
 #include "error.h"
 #include "in_stream.h"
 
-class in_stream_diagnostics : public in_stream::diagnostics
+struct in_stream_diagnostics : public in_stream::diagnostics
 {
-    error_manager &err;
-
-public:
-    in_stream_diagnostics (error_manager &err) : err (err) {}
+    using in_stream::diagnostics::diagnostics;
 
     void
     on_line_too_long () override

@@ -624,3 +624,51 @@ In addition, we merge `change_buffer` and `change_limit` into another instance o
 but leave them outside of `in_stream`.
 
 We then add the diagnostics class to `in_stream` as usual.
+
+### Separate streams for web file and change file
+
+The original tangle uses only one buffer for reading in lines from the web file and the change file and
+switches between them manually where required. However, tangle uses another buffer for keeping a line
+from the change file to compare with a line from the web file (which we turned into `change_line`). 
+
+We now want to convert this to a system that uses two separate streams for both files because the manual
+management of the variables for both files is error-prone. For instance, there is a `line` variable that
+tracks the line number, which needs to be stored into `other_line` whenever we read to from the other
+file.
+
+There are some functions that explicitly check whether we are reading from the change file, via the bool
+`changing`. We want to get rid of that variable and just use different streams.
+
+#### Specializing `error_manager`
+
+The first function we look at is `print_error_location_input` that we introduced with our 
+`error_manager`. To use separate streams, we want to use separate `error_manager`s as well. We thus 
+refactor `print_error_location` into a virtual function and derive three classes from `error_manager`,
+one for output, one for the web file, and one for the change file (the latter two actually share a base
+class that does most of the work).
+
+Importantly, we need shared state: the `history` member of `error_manager` can exist only once. We thus
+extract a class `error_state` and pass an instance of it to each error manager instance we create. As we
+have that now, we can also add the `terminal` instance there as well.
+
+We then set up two instances of `in_stream`, `web_str` and `change_str`, relying on different
+`error_manager`s.
+
+#### Separating the streams
+
+Now we turn `in_str` into a pointer. There are three cases for the usage of `in_str` so far: either it is
+only used with the change file, only with the web file, or with both. We go through all instances and 
+change `in_str.` to `change_str.`, `web_str.`, or `in_str ->` depending on that. We also need to ensure
+that whenever `change_changing` is called we change `in_str` as well. 
+
+Further, we need to use the right error stream in all error messages. We can use `change_err` and 
+`web_err` where we use `change_str` and `web_str`. For all others, we add the member `err ()` to 
+`in_stream` which just forwards the `err` from `diag`.
+
+We can move `line` into `in_stream` (as `line_number`) and delete `other_line`. Also `changing` is not
+required anymore because we can just check `in_str == &change_str`. Thus `change_changing` can be
+removed, too. 
+
+We realize that `change_str` is only ever used with `change_file` and `web_str` only with `web_file`. So
+let's move those instances into the streams. While we're at it, we also replace `input_has_ended` with 
+`web_str.eof ()` because it gets set only when `read_line ()` returns false.

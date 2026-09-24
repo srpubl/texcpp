@@ -1,4 +1,3 @@
-#include <algorithm>
 #include <climits>
 #include <cstddef>
 #include <cstdint>
@@ -10,7 +9,6 @@
 
 #include "pascal/array.h"
 #include "pascal/range.h"
-#include "pascal/text_file.h"
 
 #include "config.h"
 
@@ -28,10 +26,12 @@
 #include "text_manager.h"
 #include "tokens.h"
 
+#include "diagnostics/in_error_manager.h"
 #include "diagnostics/in_stream_diagnostics.h"
 #include "diagnostics/name_manager_diagnostics.h"
-#include "diagnostics/out_processor_diagnostics.h"
 #include "diagnostics/out_buffer_diagnostics.h"
+#include "diagnostics/out_error_manager.h"
+#include "diagnostics/out_processor_diagnostics.h"
 #include "diagnostics/output_token_reducer_diagnostics.h"
 #include "diagnostics/output_token_stream_diagnostics.h"
 #include "diagnostics/string_pool_diagnostics.h"
@@ -60,23 +60,10 @@ using pascal::operator""_r;
 // section 21 nothing tbd
 // section 22
 // section 23
-pascal::text_file web_file;
-pascal::text_file change_file;
-
 terminal          term {stdout};
-error_manager     err {term};
+error_state       err_state {term};
 
 // section 24
-void
-open_input ()
-{
-    web_file.reset ();
-    change_file.reset ();
-}
-
-in_stream_diagnostics in_str_diag {err};
-in_stream in_str {in_str_diag, config::buf_size - 1};
-
 // section 25
 // section 26
 // section 27
@@ -86,48 +73,21 @@ in_stream in_str {in_str_diag, config::buf_size - 1};
 // section 31
 // section 32
 
-///  if true, the current line is from change file
-bool changing = true;
-int  line     = 0;  /// the number of the current line in the current file
+in_web_error_manager web_err {err_state};
+in_stream_diagnostics web_str_diag {web_err};
+in_stream web_str {web_str_diag, config::buf_size - 1};
 
-void
-print_error_location_input (terminal &term)
-{
-    if (changing)
-    {
-        term.print (". (change file ");
-    }
-    else
-    {
-        term.print (". (");
-    }
-    term.print_ln ("l.{})", line);
+in_web_error_manager change_err {err_state};
+in_stream_diagnostics change_str_diag {change_err};
+in_stream change_str {change_str_diag, config::buf_size - 1};
 
-    // print characters already read
-    auto index = std::min (in_str.tell (), in_str.line ().limit ());
-    for (auto ch : in_str.line().up_to (index))
-    {
-        term.print (ch == tab_mark ? u8' ' : ch);
-    }
-    term.print_nl ("{:>{}}", "", index);
-
-    // print not yet read characters
-    term.print (in_str.line().after (index));
-    term.print (' ');
-}
+auto *in_str = &web_str;
 
 // section 33
+out_error_manager out_err {err_state};
 
-auto out_buf_diag = out_buffer_diagnostics {term, err};
+auto out_buf_diag = out_buffer_diagnostics {term, out_err};
 auto out_buf = out_buffer {config::line_length, out_buf_diag};
-
-void
-print_error_location_output (terminal &term)
-{
-    term.print_ln (". (l.{})", out_buf.current_line ());
-    term.print (out_buf.temporary_view ());
-    term.print ("... ");
-}
 
 // section 34
 // section 35
@@ -169,7 +129,7 @@ auto current_id       = std::u8string_view {};
 // section 63
 // section 64
 
-auto str_pool_diag = string_pool_diagnostics {term, err};
+auto str_pool_diag = string_pool_diagnostics {term, web_err};
 auto str_pool = string_pool {str_pool_diag};
 
 auto
@@ -183,7 +143,7 @@ on_add_string (std::u8string_view id) -> index_t
     return str_pool.add (id, length);
 }
 
-auto name_mgr_diag = name_manager_diagnostics {err};
+auto name_mgr_diag = name_manager_diagnostics {web_err};
 auto name_mgr     = name_manager {name_mgr_diag, on_add_string};
 
 
@@ -206,11 +166,11 @@ auto mod_text        = pascal::array<inname_index_t, ascii_code_t> {};  /// name
 // section 78
 
 
-auto output_token_str_diag = output_token_stream_diagnostics {err};
+auto output_token_str_diag = output_token_stream_diagnostics {out_err};
 auto output_token_str      = output_token_stream {name_mgr, text_mgr, output_token_str_diag};
-auto out_proc_diag         = out_processor_diagnostics {err};
+auto out_proc_diag         = out_processor_diagnostics {out_err};
 auto out_proc              = out_processor {out_buf, out_proc_diag};
-auto output_token_red_diag = output_token_reducer_diagnostics {err};
+auto output_token_red_diag = output_token_reducer_diagnostics {out_err};
 auto output_token_red      = output_token_reducer {
     output_token_str, out_proc, str_pool.check_sum(), output_token_red_diag};
 
@@ -247,8 +207,8 @@ output_compressed_tables (terminal &term)
 {
     if (!text_mgr.root ().continuation ())
     {
-        err.terminal ().print_nl ("! No output was specified.");
-        err.mark_harmless ();
+        out_err.terminal ().print_nl ("! No output was specified.");
+        out_err.mark_harmless ();
         return;
     }
 
@@ -263,7 +223,7 @@ output_compressed_tables (terminal &term)
     auto brace_level = output_token_red.brace_level ();
     if (brace_level != 0)
     {
-        err.err_print ("! Program ended at brace level {}", brace_level);
+        out_err.err_print ("! Program ended at brace level {}", brace_level);
     }
     term.print_nl ("Done.");
 }
@@ -272,28 +232,14 @@ output_compressed_tables (terminal &term)
 // section 123 nothing tbd
 
 // section 124
-
-int other_line = 0;
-bool input_has_ended;
-
 // Section 125
-
-void
-change_changing ()
-{
-    changing = !changing;
-    std::swap (line, other_line);
-}
-
 // section 126
-auto change_line = input_line_buffer {config::buf_size - 1};
-
 // section 127
 
 auto
 lines_dont_match () -> bool
 {
-    return !in_str.line ().matches (change_line);
+    return !web_str.line ().matches (change_str.line ());
 }
 
 // section 128
@@ -306,15 +252,10 @@ skip_blank_lines ();
 void
 prime_the_change_line ()
 {
-    change_line.clear ();
-
     if (!skip_to_start_of_change ())
         return;
 
-    if (!skip_blank_lines ())
-        return;
-
-    change_line.copy_content_from (in_str.line ());
+    skip_blank_lines ();
 }
 
 // section 129
@@ -322,7 +263,7 @@ prime_the_change_line ()
 ascii_code_t
 get_change_control_letter ()
 {
-    auto &line = in_str.line ();
+    auto &line = change_str.line ();
 
     if (line.limit () < 2 || line [0] != u8'@')
         return 0;
@@ -344,15 +285,14 @@ skip_to_start_of_change ()
 {
     while (true)
     {
-        ++line;
-        if (!in_str.read_line_from (change_file))
+        if (!change_str.read_line ())
             return false;
 
         switch (get_change_control_letter ())
         {
         case u8'x': return true;
         case u8'y':
-        case u8'z': in_str.seek(2); err.err_print ("! Where is the matching @x?");
+        case u8'z': change_str.seek(2); change_err.err_print ("! Where is the matching @x?");
         }
     }
 }
@@ -363,14 +303,13 @@ skip_blank_lines ()
 {
     do
     {
-        ++line;
-        if (!in_str.read_line_from (change_file))
+        if (!change_str.read_line ())
         {
-            err.err_print ("! Change file ended after @x");
+            change_err.err_print ("! Change file ended after @x");
             return false;
         }
     }
-    while (in_str.line ().limit () <= 0);
+    while (change_str.line ().limit () <= 0);
 
     return true;
 }
@@ -391,28 +330,23 @@ check_change ()
 
     while (true)
     {
-        change_changing ();  // now it's true
-        ++line;
-
-        if (!in_str.read_line_from (change_file))
+        in_str = &change_str;
+        if (!change_str.read_line ())
         {
-            err.err_print ("! Change file ended before @y");
-            change_line.clear ();
-            change_changing ();  // false again
+            change_err.err_print ("! Change file ended before @y");
+            change_str.line ().clear ();
+            in_str = &web_str;
             return;
         }
 
         if (!verify_possible_y_line (non_matching_lines))
             return;
 
-        change_line.copy_content_from (in_str.line ());
-        change_changing ();  // now it's false
-        ++line;
+        in_str = &web_str;
 
-        if (!in_str.read_line_from (web_file))
+        if (!web_str.read_line ())
         {
-            err.err_print ("! WEB file ended during a change");
-            input_has_ended = true;
+            web_err.err_print ("! WEB file ended during a change");
             return;
         }
 
@@ -435,13 +369,13 @@ verify_possible_y_line (int non_matching_lines)
     case u8'y':
         if (non_matching_lines > 0)
         {
-            in_str.seek (2);
-            err.err_print ("! Hmm... {} of the preceding lines failed to match", non_matching_lines);
+            change_str.seek (2);
+            change_err.err_print ("! Hmm... {} of the preceding lines failed to match", non_matching_lines);
         }
         return false;
 
     case u8'x':
-    case u8'z': in_str.seek (2); err.err_print ("! Where is the matching @y?");
+    case u8'z': change_str.seek (2); change_err.err_print ("! Where is the matching @y?");
     }
 
     return true;
@@ -452,18 +386,8 @@ verify_possible_y_line (int non_matching_lines)
 void
 initialize_input_system ()
 {
-    open_input ();
-
-    line       = 0;
-    other_line = 0;
-    changing   = true;
-
     prime_the_change_line ();
-    change_changing ();
-
-    in_str.seek (1);
-
-    input_has_ended = false;
+    in_str = &web_str;
 }
 
 // section 135, 136
@@ -476,32 +400,27 @@ get_line ()
 {
     while (true)
     {
-        if (changing)
+        if (in_str == &change_str)
         {
             read_from_change_file ();
         }
 
-        if (!changing)
+        if (in_str == &web_str)
         {
-            ++line;
-            if (!in_str.read_line_from (web_file))
-            {
-                input_has_ended = true;
-            }
-            else if (change_line.limit () > 0)
+            if (web_str.read_line () && change_str.line ().limit () > 0)
             {
                 check_change ();
             }
 
-            if (changing)
+            if (in_str == &change_str)
                 continue;
         }
 
         break;
     }
 
-    in_str.seek (0);
-    in_str.line ().pad_end (u8' ');
+    in_str -> seek (0);
+    in_str -> line ().pad_end (u8' ');
 }
 
 // section 137
@@ -509,22 +428,22 @@ get_line ()
 void
 read_from_change_file ()
 {
-    ++line;
-    if (!in_str.read_line_from (change_file))
+    if (!change_str.read_line ())
     {
-        err.err_print ("\n! Change file ended without @z");
-        in_str.line ().set (u8"@z");        
+        change_err.err_print ("\n! Change file ended without @z");
+        change_str.line ().set (u8"@z");        
     }
 
     switch (get_change_control_letter ())
     {
     case u8'z':
+        in_str = &change_str;
         prime_the_change_line ();
-        change_changing ();
+        in_str = &web_str;
         break;
 
     case u8'x':
-    case u8'y': in_str.seek (2); err.err_print ("! Where is the matching @z?");
+    case u8'y': change_str.seek (2); change_err.err_print ("! Where is the matching @z?");
     }
 }
 
@@ -533,13 +452,10 @@ read_from_change_file ()
 void
 check_read_all_changes ()
 {
-    if (change_line.limit () != 0)
+    if (change_str.line ().limit () != 0)
     {
-        in_str.line ().copy_content_from (change_line);
-        changing = true;
-        line     = other_line;
-        in_str.seek (change_line.limit ());
-        err.err_print ("! Change file entry did not match");
+        change_str.seek (change_str.line ().limit ());
+        change_err.err_print ("! Change file entry did not match");
     }
 }
 
@@ -609,22 +525,22 @@ skip_ahead ()
 {
     while (true)
     {
-        if (in_str.eol ())
+        if (in_str -> eol ())
         {
             get_line ();
-            if (input_has_ended)
+            if (web_str.eof())
                 return new_module;
         }
 
         // Put @ as marker so we don't have to check also for the end
-        in_str.line ().mark_end (u8'@');
-        while (in_str.peek () != u8'@') { in_str.advance (); }  // find the next marker
+        in_str -> line ().mark_end (u8'@');
+        while (in_str -> peek () != u8'@') { in_str -> advance (); }  // find the next marker
 
         // If we find a @ (other than our own marker) we check the respective control code
-        if (!in_str.eol ())
+        if (!in_str -> eol ())
         {
-            in_str.advance (2);
-            auto ascii = in_str.peek_back ();
+            in_str -> advance (2);
+            auto ascii = in_str -> peek_back ();
             auto c     = control_code (ascii);
             if (c != ignore || ascii == u8'>')
                 return c;
@@ -641,32 +557,32 @@ skip_comment ()
     int balance = 0;
     while (true)
     {
-        if (in_str.eol ())
+        if (in_str -> eol ())
         {
             get_line ();
-            if (input_has_ended)
+            if (web_str.eof())
             {
-                err.err_print ("! Input ended in mid-comment");
+                in_str -> err ().err_print ("! Input ended in mid-comment");
                 return;
             }
         }
 
-        auto c = in_str.get();
+        auto c = in_str -> get();
 
         if (c == u8'@')
         {
-            c = in_str.peek ();
+            c = in_str -> peek ();
             if (c == u8' ' || c == tab_mark || c == u8'*')
             {
-                err.err_print ("! Section ended in mid-comment");
-                in_str.retreat ();
+                in_str -> err ().err_print ("! Section ended in mid-comment");
+                in_str -> retreat ();
                 return;
             }
-            in_str.advance ();
+            in_str -> advance ();
         }
-        else if (c == u8'\\' && in_str.peek () != u8'@')
+        else if (c == u8'\\' && in_str -> peek () != u8'@')
         {
-            in_str.advance ();
+            in_str -> advance ();
         }
         else if (c == u8'{')
         {
@@ -699,13 +615,13 @@ scan_module_name ();
 inline bool
 compress_if (char8_t &c, char8_t match, char8_t compressed)
 {
-    if (in_str.peek () != match)
+    if (in_str -> peek () != match)
         return false;
 
-    if (!in_str.eol ())
+    if (!in_str -> eol ())
     {
         c = compressed;
-        in_str.advance ();
+        in_str -> advance ();
     }
 
     return true;
@@ -716,13 +632,13 @@ get_next ()
 {
     while (true)
     {
-        if (in_str.eol ())
+        if (in_str -> eol ())
         {
             get_line ();
-            if (input_has_ended)
+            if (web_str.eof())
                 return new_module;
         }
-        auto c = in_str.get ();
+        auto c = in_str -> get ();
 
         if (scanning_hex)
         {
@@ -740,7 +656,7 @@ get_next ()
         case u8'"': return get_preprocessed_string ();
 
         case u8'@':
-            c = control_code (in_str.get ());
+            c = control_code (in_str -> get ());
             if (c == ignore)
                 continue;
 
@@ -757,9 +673,9 @@ get_next ()
                 do { c = skip_ahead (); }
                 while (c == u8'@');
 
-                if (in_str.peek_back () != u8'>')
+                if (in_str -> peek_back () != u8'>')
                 {
-                    err.err_print ("! Improper @ within control text");
+                    in_str -> err ().err_print ("! Improper @ within control text");
                 }
 
                 continue;
@@ -777,7 +693,7 @@ get_next ()
         case u8' ':
         case tab_mark: continue;
         case u8'{': skip_comment (); continue;
-        case u8'}': err.err_print ("! Extra }}"); continue;
+        case u8'}': in_str -> err ().err_print ("! Extra }}"); continue;
 
         default:
             if (c >= 128)
@@ -792,25 +708,25 @@ get_next ()
 ascii_code_t
 get_identifier (ascii_code_t c)
 {
-    if (in_str.tell () > 1
+    if (in_str -> tell () > 1
         && (c == u8'E' || c == u8'e')
-        && is_digit (in_str.peek_back (2)) // the char before c
+        && is_digit (in_str -> peek_back (2)) // the char before c
     )  
         return u8'E';
 
     ascii_code_t d;
-    auto id_first = in_str.tell () - 1;
+    auto id_first = in_str -> tell () - 1;
     do
     {
-        d = in_str.get ();
+        d = in_str -> get ();
     }
     while (is_alphanumeric (d) || d == u8'_');
-    in_str.retreat ();
+    in_str -> retreat ();
 
-    if (in_str.tell () > id_first + 1)
+    if (in_str -> tell () > id_first + 1)
     {
         c          = identifier;
-        current_id = {& in_str.line () [id_first], static_cast<size_t> (in_str.tell () - id_first)};
+        current_id = {& in_str -> line () [id_first], static_cast<size_t> (in_str -> tell () - id_first)};
     }
 
     return c;
@@ -822,33 +738,33 @@ get_preprocessed_string ()
 {
     ascii_code_t d;
     double_chars  = 0_r;
-    auto id_first = in_str.tell () - 1_r;
+    auto id_first = in_str -> tell () - 1_r;
 
     do
     {
-        d = in_str.get ();
+        d = in_str -> get ();
         if (d == u8'"' || d == u8'@')
         {
-            if (in_str.peek () == d)
+            if (in_str -> peek () == d)
             {
-                in_str.advance ();
+                in_str -> advance ();
                 d = 0;
                 ++double_chars;
             }
             else if (d == u8'@')
             {
-                err.err_print ("! Double @ sign missing");
+                in_str -> err ().err_print ("! Double @ sign missing");
             }
         }
-        else if (in_str.eol ())
+        else if (in_str -> eol ())
         {
-            err.err_print ("! String constant didn't end");
+            in_str -> err ().err_print ("! String constant didn't end");
             d = u8'"';
         }
     }
     while (d != u8'"');
 
-    current_id = {& in_str.line () [id_first], static_cast<size_t> (in_str.tell () - 1 - id_first)};
+    current_id = {& in_str -> line () [id_first], static_cast<size_t> (in_str -> tell () - 1 - id_first)};
     return identifier;
 }
 
@@ -887,36 +803,36 @@ put_module_name_in_mod_text () -> inname_index_t
     auto k = inname_index_t {0};
     while (true)
     {
-        if (in_str.eol ())
+        if (in_str -> eol ())
         {
             get_line ();
-            if (input_has_ended)
+            if (web_str.eof ())
             {
-                err.err_print ("! Input has ended in section name");
+                in_str -> err ().err_print ("! Input has ended in section name");
                 break;
             }
         }
 
-        d = in_str.peek ();
+        d = in_str -> peek ();
         if (d == u8'@')
         {
-            d = in_str.peek_ahead ();
+            d = in_str -> peek_ahead ();
             if (d == u8'>')
             {
-                in_str.advance (2);
+                in_str -> advance (2);
                 break;
             }
             if (d == u8' ' || d == tab_mark || d == u8'*')
             {
-                err.err_print ("! Section name didn't end");
+                in_str -> err ().err_print ("! Section name didn't end");
                 break;
             }
             ++k;
             mod_text [k] = u8'@';
-            in_str.advance ();
+            in_str -> advance ();
         }
 
-        in_str.advance ();
+        in_str -> advance ();
         if (k < config::longest_name - 1)
         {
             ++k;
@@ -934,10 +850,10 @@ put_module_name_in_mod_text () -> inname_index_t
 
     if (k > config::longest_name - 2)
     {
-        err.terminal ().print_nl ("! Section name too long: ");
-        err.terminal ().print ({&mod_text.data ()[1], 25});
-        err.terminal ().print ("...");
-        err.mark_harmless ();
+        in_str -> err ().terminal ().print_nl ("! Section name too long: ");
+        in_str -> err ().terminal ().print ({&mod_text.data ()[1], 25});
+        in_str -> err ().terminal ().print ("...");
+        in_str -> err ().mark_harmless ();
     }
 
     if (k > 0 && mod_text [k] == u8' ')
@@ -1042,17 +958,17 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
     case new_module  : return scan_numeric_cases::done;
 
     case u8';':
-        err.err_print ("! Omit semicolon in numeric definition");
+        in_str -> err ().err_print ("! Omit semicolon in numeric definition");
         return scan_numeric_cases::consumed;
 
     default:
-        err.err_print ("! Improper numeric definition will be flushed");
+        in_str -> err ().err_print ("! Improper numeric definition will be flushed");
         do { next_control = skip_ahead (); }
         while (!end_of_definition (next_control));
 
         if (next_control == module_name)  // we want to scan the module name too
         {
-            in_str.retreat (2);
+            in_str -> retreat (2);
             next_control = get_next ();
         }
 
@@ -1079,7 +995,7 @@ scan_numeric ()
 
     if (std::abs (accumulator) >= 0x8000)
     {
-        err.err_print ("! Value too big: ", accumulator);
+        in_str -> err ().err_print ("! Value too big: ", accumulator);
         accumulator = 0;
     }
     return accumulator;
@@ -1118,7 +1034,7 @@ scan_replacement (uint8_t type)
         case u8')':
             if (balance == 0)
             {
-                err.err_print ("! Extra )");
+                in_str -> err ().err_print ("! Extra )");
             }
             else
             {
@@ -1164,9 +1080,9 @@ scan_replacement (uint8_t type)
         case begin_pascal:
             if (type == module_name)
             {
-                err.err_print (
+                in_str -> err ().err_print (
                     "! @ {} is ignored in Pascal text",
-                    convert_to_output (in_str.peek_back ()));
+                    convert_to_output (in_str -> peek_back ()));
                 continue;
             }
             done = true;
@@ -1196,11 +1112,11 @@ ensure_parantheses_balance (int &balance)
     {
         if (balance == 1)
         {
-            err.err_print ("! Missing )");
+            in_str -> err ().err_print ("! Missing )");
         }
         else
         {
-            err.err_print ("! Missing {} )'s", balance);
+            in_str -> err ().err_print ("! Missing {} )'s", balance);
         }
     }
 
@@ -1223,29 +1139,29 @@ copy_string_from_buffer_to_text_mgr ()
         text_mgr.append_to_next_new (static_cast<text_manager::char_type>(b));
         if (b == u8'@')
         {
-            if (in_str.peek () == u8'@')
+            if (in_str -> peek () == u8'@')
             {
-                in_str.advance ();  // store only one @
+                in_str -> advance ();  // store only one @
             }
             else
             {
-                err.err_print ("! You should double @ signs in strings");
+                in_str -> err ().err_print ("! You should double @ signs in strings");
             }
         }
 
-        if (in_str.end_of_content ())
+        if (in_str -> end_of_content ())
         {
-            err.err_print ("! String didn't end");
-            in_str.patch (u8"'\0");
+            in_str -> err ().err_print ("! String didn't end");
+            in_str -> patch (u8"'\0");
         }
 
-        b = in_str.get ();
+        b = in_str -> get ();
         if (b == u8'\'')
         {
-            if (in_str.peek () != u8'\'')
+            if (in_str -> peek () != u8'\'')
                 break;
 
-            in_str.advance ();
+            in_str -> advance ();
             text_mgr.append_to_next_new (u8'\'');
         }
     }
@@ -1258,41 +1174,41 @@ void
 copy_verbatim_from_buffer_to_text_mgr ()
 {
     text_mgr.append_to_next_new (verbatim);
-    in_str.line ().mark_end (u8'@');
+    in_str -> line ().mark_end (u8'@');
 
     while (true)
     {
-        if (in_str.peek () == u8'@')
+        if (in_str -> peek () == u8'@')
         {
-            if (!in_str.end_of_content ())
+            if (!in_str -> end_of_content ())
             {
-                if (in_str.peek_ahead () == u8'@')
+                if (in_str -> peek_ahead () == u8'@')
                 {
                     text_mgr.append_to_next_new (U'@');
-                    in_str.advance (2);
+                    in_str -> advance (2);
                     continue;
                 }
             }
         }
         else
         {
-            text_mgr.append_to_next_new (static_cast<text_manager::char_type> (in_str.get ()));
+            text_mgr.append_to_next_new (static_cast<text_manager::char_type> (in_str -> get ()));
             continue;
         }
 
         break;
     }
 
-    if (in_str.end_of_content ())
+    if (in_str -> end_of_content ())
     {
-        err.err_print ("! Verbatim string didn't end");
+        in_str -> err ().err_print ("! Verbatim string didn't end");
     }
-    else if (in_str.peek_ahead () != u8'>')
+    else if (in_str -> peek_ahead () != u8'>')
     {
-        err.err_print ("! You shouldn't double @ signs in verbatim strings");
+        in_str -> err ().err_print ("! You shouldn't double @ signs in verbatim strings");
     }
 
-    in_str.advance (2);
+    in_str -> advance (2);
     text_mgr.append_to_next_new (verbatim);
 }
 
@@ -1337,7 +1253,7 @@ scan_definition_part ()
             next_control = skip_ahead ();
             if (next_control == module_name)  // we want to scan the module name too
             {
-                in_str.retreat (2);
+                in_str -> retreat (2);
                 next_control = get_next ();
             }
         }
@@ -1348,7 +1264,7 @@ scan_definition_part ()
         next_control = get_next ();  // get identifier name
         if (next_control != identifier)
         {
-            err.err_print ("! Definition flushed must start with identifier of length > 1");
+            in_str -> err ().err_print ("! Definition flushed must start with identifier of length > 1");
             continue;
         }
         next_control = get_next ();  // get token after the identifier
@@ -1376,7 +1292,7 @@ scan_definition_part ()
                     next_control = get_next ();
                     if (next_control == u8'=')
                     {
-                        err.err_print ("! Use == for macros");
+                        in_str -> err ().err_print ("! Use == for macros");
                         next_control = equivalence_sign;
                     }
                     if (next_control == equivalence_sign)
@@ -1407,7 +1323,7 @@ scan_pascal_part ()
 
         if (next_control != u8'=' && next_control != equivalence_sign)
         {
-            err.err_print ("! Pascal text flushed, = sign is missing");
+            in_str -> err ().err_print ("! Pascal text flushed, = sign is missing");
             do { next_control = skip_ahead (); }
             while (next_control != new_module);
             return;
@@ -1474,31 +1390,33 @@ tangle (
     std::filesystem::path pascal_file_name,
     std::filesystem::path pool_file_name)
 {
-    web_file.assign (web_file_name);
-    change_file.assign (change_file_name);
-        
+    web_err.set_stream(&web_str);
+    change_err.set_stream(&change_str);
+    out_err.set_buffer (&out_buf);
+
+    web_str.open (web_file_name);
+    change_str.open (change_file_name);
+
     initialize (pascal_file_name, pool_file_name);
     initialize_input_system ();
     term.print_ln ("{}", config::banner);
 
-    err.set_print_error_location (print_error_location_input);
     module_count = 0;
 
     do { next_control = skip_ahead (); }
     while (next_control != new_module);
 
-    while (!input_has_ended) { scan_module (); }
+    while (!web_str.eof ()) { scan_module (); }
 
     check_read_all_changes ();
-    err.set_print_error_location (print_error_location_output);
 
     output_compressed_tables (term);
     str_pool.finalize ();
     out_buf.finalize ();
-    web_file.close ();
-    change_file.close ();
+    web_str.close ();
+    change_str.close ();
 
-    return err.exit_code ();
+    return in_str -> err ().exit_code ();
 }
 
 int

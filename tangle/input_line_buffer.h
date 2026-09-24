@@ -16,6 +16,7 @@ public:
     input_line_buffer (size_t max_size) : base_type ()
     {
         reserve (max_size + extra_chars);
+        resize (2);
     }
 
     using base_type::operator[];

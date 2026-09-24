@@ -4,7 +4,7 @@
 
 using print_error_location_t = void (*) (terminal &);
 
-class error_manager
+struct error_state
 {
     enum history_enum
     {
@@ -14,19 +14,11 @@ class error_manager
         fatal_message
     };
 
-    history_enum           history              = spotless;
-    print_error_location_t print_error_location = {};
-    ::terminal              &term;
+    history_enum  history = spotless;
+    terminal              &term;
 
-  public:
-    error_manager (::terminal &term) : term (term) {}
-
-    ::terminal &
-    terminal () const { return term; }
-
-    inline void
-    set_print_error_location (print_error_location_t f)
-    { print_error_location = f; }
+    error_state (terminal &term) : term (term)
+    {}
 
     inline void
     mark_harmless ()
@@ -44,32 +36,45 @@ class error_manager
     inline void
     mark_fatal ()
     { history = fatal_message; }
+};
 
-    inline int exit_code () { return history; }
+class error_manager
+{
+    error_state &state;
+
+  public:
+    error_manager (error_state &state) : state (state) {}
+
+    ::terminal &
+    terminal () const { return state.term; }
+
+    inline int exit_code () { return state.history; }
 
     inline void
     error ()
     {
-        print_error_location (term);
-        term.update ();
-        mark_error ();
+        print_error_location ();
+        state.term.update ();
+        state.mark_error ();
     }
+
+    void mark_harmless () { state.mark_harmless(); }
 
     template <typename... Args>
     void
     err_print (std::format_string<Args...> fmt, Args &&...args)
     {
-        term.print_nl (fmt, std::forward<Args> (args)...);
+        terminal ().print_nl (fmt, std::forward<Args> (args)...);
         error ();
-    }
+    }    
 
     template <typename... Args>
     void
     fatal_error (std::format_string<Args...> fmt, Args &&...args)
     {
         err_print (fmt, std::forward<Args> (args)...);
-        mark_fatal ();
-        std::exit (history);
+        state.mark_fatal ();
+        std::exit (state.history);
     }
 
     inline void
@@ -79,4 +84,9 @@ class error_manager
     inline void
     overflow (std::string_view what)
     { fatal_error ("! Sorry, {} capacity exceeded", what); }
+
+protected:
+    virtual void 
+    print_error_location () = 0;
 };
+
