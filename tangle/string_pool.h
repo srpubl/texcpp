@@ -11,7 +11,9 @@ public:
     struct diagnostics 
     {
         virtual void on_string_too_long () = 0;
-        virtual void on_summary (config::index_t count) = 0; 
+        virtual void on_summary (config::index_t count) = 0;
+
+        virtual ~diagnostics () = default;
     };
 
 private:

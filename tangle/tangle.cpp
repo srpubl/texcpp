@@ -5,14 +5,13 @@
 #include <print>
 #include <string_view>
 
-#include "utility/between.h"
-
 #include "pascal/array.h"
 #include "pascal/range.h"
 
 #include "config.h"
 
 #include "character.h"
+#include "change_stream.h"
 #include "error.h"
 #include "in_stream.h"
 #include "name_manager.h"
@@ -79,7 +78,7 @@ in_stream web_str {web_str_diag, config::buf_size - 1};
 
 in_web_error_manager change_err {err_state};
 in_stream_diagnostics change_str_diag {change_err};
-in_stream change_str {change_str_diag, config::buf_size - 1};
+change_stream change_str {change_str_diag, config::buf_size - 1};
 
 auto *in_str = &web_str;
 
@@ -235,122 +234,48 @@ output_compressed_tables (terminal &term)
 // Section 125
 // section 126
 // section 127
-
-auto
-lines_dont_match () -> bool
-{
-    return !web_str.line ().matches (change_str.line ());
-}
-
 // section 128
-
-bool
-skip_to_start_of_change ();
-bool
-skip_blank_lines ();
-
-void
-prime_the_change_line ()
-{
-    if (!skip_to_start_of_change ())
-        return;
-
-    skip_blank_lines ();
-}
-
 // section 129
-
-ascii_code_t
-get_change_control_letter ()
-{
-    auto &line = change_str.line ();
-
-    if (line.limit () < 2 || line [0] != u8'@')
-        return 0;
-
-    auto &c = line [1];
-
-    if (is_between (c, u8'X', u8'Z'))
-    {
-        c += (u8'z' - u8'Z');
-    }
-
-    return c;
-}
-
-/// searches for an @x or @X at beginning of a line in the change file, and reports an error if it finds
-/// @y or @z before that. Returns true if @x was found
-bool
-skip_to_start_of_change ()
-{
-    while (true)
-    {
-        if (!change_str.read_line ())
-            return false;
-
-        switch (get_change_control_letter ())
-        {
-        case u8'x': return true;
-        case u8'y':
-        case u8'z': change_str.seek(2); change_err.err_print ("! Where is the matching @x?");
-        }
-    }
-}
-
 // section 130
-bool
-skip_blank_lines ()
-{
-    do
-    {
-        if (!change_str.read_line ())
-        {
-            change_err.err_print ("! Change file ended after @x");
-            return false;
-        }
-    }
-    while (change_str.line ().limit () <= 0);
-
-    return true;
-}
-
 // section 131
 // section 132
 
-bool
-verify_possible_y_line (int non_matching_lines);
-
-void
-check_change ()
+in_stream *
+match_target_lines_and_choose_stream ()
 {
-    if (lines_dont_match ())
-        return;
+    if (!web_str.line ().matches (change_str.line ()))
+        return &web_str;
 
     int non_matching_lines = 0;
 
     while (true)
     {
-        in_str = &change_str;
         if (!change_str.read_line ())
         {
             change_err.err_print ("! Change file ended before @y");
             change_str.line ().clear ();
-            in_str = &web_str;
-            return;
+            return &web_str;
         }
 
-        if (!verify_possible_y_line (non_matching_lines))
-            return;
+        if (change_str.is_starting_replacement ())
+        {
+            if (non_matching_lines > 0)
+            {
+                change_str.seek (2);
+                change_str.err ().err_print ("! Hmm... {} of the preceding lines failed to match", 
+                    non_matching_lines);
+            }
 
-        in_str = &web_str;
+            return &change_str;
+        }
 
         if (!web_str.read_line ())
         {
-            web_err.err_print ("! WEB file ended during a change");
-            return;
+            web_str.err ().err_print ("! WEB file ended during a change");
+            return &web_str;
         }
 
-        if (lines_dont_match ())
+        if (!web_str.line ().matches (change_str.line ()))
         {
             ++non_matching_lines;
         }
@@ -358,107 +283,40 @@ check_change ()
 }
 
 // section 133
-
-/// If the current line starts with @y, report any discrepancies and return false
-/// Returns true if everything is ok, false if there was an issue
-bool
-verify_possible_y_line (int non_matching_lines)
-{
-    switch (get_change_control_letter ())
-    {
-    case u8'y':
-        if (non_matching_lines > 0)
-        {
-            change_str.seek (2);
-            change_err.err_print ("! Hmm... {} of the preceding lines failed to match", non_matching_lines);
-        }
-        return false;
-
-    case u8'x':
-    case u8'z': change_str.seek (2); change_err.err_print ("! Where is the matching @y?");
-    }
-
-    return true;
-}
-
 // section 134
-
-void
-initialize_input_system ()
-{
-    prime_the_change_line ();
-    in_str = &web_str;
-}
-
 // section 135, 136
 
-void
-read_from_change_file ();
-
-void
+bool
 get_line ()
 {
     while (true)
     {
         if (in_str == &change_str)
         {
-            read_from_change_file ();
+            if (change_str.read_replacement_line ())
+                break;            
+
+            in_str = &web_str;
         }
 
+        if (!web_str.read_line ())
+            break;
+
+        if (change_str.line ().empty ())
+            break;
+        
+        in_str = match_target_lines_and_choose_stream ();
         if (in_str == &web_str)
-        {
-            if (web_str.read_line () && change_str.line ().limit () > 0)
-            {
-                check_change ();
-            }
-
-            if (in_str == &change_str)
-                continue;
-        }
-
-        break;
+            break;
     }
 
     in_str -> seek (0);
     in_str -> line ().pad_end (u8' ');
+    return !web_str.eof ();
 }
 
 // section 137
-
-void
-read_from_change_file ()
-{
-    if (!change_str.read_line ())
-    {
-        change_err.err_print ("\n! Change file ended without @z");
-        change_str.line ().set (u8"@z");        
-    }
-
-    switch (get_change_control_letter ())
-    {
-    case u8'z':
-        in_str = &change_str;
-        prime_the_change_line ();
-        in_str = &web_str;
-        break;
-
-    case u8'x':
-    case u8'y': change_str.seek (2); change_err.err_print ("! Where is the matching @z?");
-    }
-}
-
 // section 138
-
-void
-check_read_all_changes ()
-{
-    if (change_str.line ().limit () != 0)
-    {
-        change_str.seek (change_str.line ().limit ());
-        change_err.err_print ("! Change file entry did not match");
-    }
-}
-
 // section 139
 
 /// control code of no interest to TANGLE
@@ -527,8 +385,8 @@ skip_ahead ()
     {
         if (in_str -> eol ())
         {
-            get_line ();
-            if (web_str.eof())
+            
+            if (!get_line ())
                 return new_module;
         }
 
@@ -559,8 +417,7 @@ skip_comment ()
     {
         if (in_str -> eol ())
         {
-            get_line ();
-            if (web_str.eof())
+            if (!get_line ())
             {
                 in_str -> err ().err_print ("! Input ended in mid-comment");
                 return;
@@ -634,8 +491,7 @@ get_next ()
     {
         if (in_str -> eol ())
         {
-            get_line ();
-            if (web_str.eof())
+            if (!get_line ())
                 return new_module;
         }
         auto c = in_str -> get ();
@@ -805,8 +661,7 @@ put_module_name_in_mod_text () -> inname_index_t
     {
         if (in_str -> eol ())
         {
-            get_line ();
-            if (web_str.eof ())
+            if (!get_line ())
             {
                 in_str -> err ().err_print ("! Input has ended in section name");
                 break;
@@ -1351,38 +1206,6 @@ scan_pascal_part ()
 // section 179, 180, 181: debugging, left out for now
 
 // section 182
-
-void
-initialize (std::filesystem::path const &pascal_file_name, std::filesystem::path const &pool_file_name)
-{
-    // section 10
-    // section 14, 17
-    // section 18
-    // section 21 nothing tbd
-    // section 26
-
-    out_buf.initialize (pascal_file_name);
-    str_pool.initialize (pool_file_name);
-
-    // section 42
-    name_mgr.initialize (config::max_bytes, config::max_names);
-    text_mgr.initialize (config::max_toks, config::max_texts);
-
-
-    // section 46
-    // section 48
-    // section 52
-    // section 71
-    // section 144
-    scanning_hex = false;
-
-    // section 152
-    mod_text [0_r] = u8' ';
-
-    // section 180 nothing tbd
-}
-
-// section 182
 int
 tangle (
     std::filesystem::path web_file_name,
@@ -1392,29 +1215,35 @@ tangle (
 {
     web_err.set_stream(&web_str);
     change_err.set_stream(&change_str);
-    out_err.set_buffer (&out_buf);
 
     web_str.open (web_file_name);
     change_str.open (change_file_name);
 
-    initialize (pascal_file_name, pool_file_name);
-    initialize_input_system ();
+    str_pool.initialize (pool_file_name);
+    name_mgr.initialize (config::max_bytes, config::max_names);
+    text_mgr.initialize (config::max_toks, config::max_texts);
+
     term.print_ln ("{}", config::banner);
 
+    in_str = &web_str;
+    scanning_hex = false;
+    mod_text [0_r] = u8' ';
     module_count = 0;
 
+    change_str.read_next_target_line ();
     do { next_control = skip_ahead (); }
     while (next_control != new_module);
 
     while (!web_str.eof ()) { scan_module (); }
+    change_str.check_if_processed_all_changes ();
+    web_str.close ();
+    change_str.close ();
 
-    check_read_all_changes ();
-
+    out_buf.initialize (pascal_file_name);
+    out_err.set_buffer (&out_buf);
     output_compressed_tables (term);
     str_pool.finalize ();
     out_buf.finalize ();
-    web_str.close ();
-    change_str.close ();
 
     return in_str -> err ().exit_code ();
 }

@@ -31,6 +31,8 @@ public:
         virtual void on_no_match         () = 0;
         virtual void on_too_many_matches () = 0;
         virtual void on_id_conflict      (std::u8string_view) = 0;
+
+        virtual ~diagnostics () = default;
     };
 
 private:

@@ -13,8 +13,9 @@ public:
         virtual void on_fraction_too_long   () = 0;
         virtual void on_string_too_long     () = 0;
         virtual void on_verbatim_too_long   () = 0;
-
         virtual void on_invalid_ascii (char8_t) = 0;
+
+        virtual ~diagnostics () = default;
     };
 
 private:

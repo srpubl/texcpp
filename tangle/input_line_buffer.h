@@ -22,6 +22,7 @@ public:
     using base_type::operator[];
 
     auto limit () const { return size () - extra_chars; }
+    auto empty () const { return limit () == 0; }
     auto up_to (size_t n) const { return string_view { data (), n};}
     auto after (size_t n) const { return string_view { begin () + n, begin () + limit ()}; }
     auto content () const { return up_to (limit ()); }

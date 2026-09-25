@@ -31,6 +31,8 @@ public:
     {
         virtual void on_new_line (int line) = 0;
         virtual void on_line_truncated () = 0;
+
+        virtual ~diagnostics () = default;
     };
 
 private:

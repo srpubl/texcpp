@@ -672,3 +672,38 @@ removed, too.
 We realize that `change_str` is only ever used with `change_file` and `web_str` only with `web_file`. So
 let's move those instances into the streams. While we're at it, we also replace `input_has_ended` with 
 `web_str.eof ()` because it gets set only when `read_line ()` returns false.
+
+#### Specializing `change_stream`
+
+With some very small changes we can now separate a set of functions that work exclusively with 
+`change_str`. To keep a bit of an overview, we move them into a new class `change_stream` derived from
+`in_stream`. Consequentially, we also need `change_stream::diagnostics`, which derives from 
+`in_stream::diagnostics`. 
+
+It is then implied that `change_stream_diagnostics` needs to derive from `change_stream::diagnostics` 
+and from `in_stream_diagnostics` because we need to reuse the concrete implementation and add 
+additional concrete implementations.
+
+This requires us to emply virtual inheritance as otherwise we would have multiple instances of
+references to `error_manager` in that object. We also add virtual destructors, which technically in our
+concrete system would not be necessary but which would be required if we wanted to destroy objects
+dynamically. And this is true for all other classes with virtual methods, so we just pay that technical
+debt right now, too.
+
+We massage the methods a bit such that their interaction with their callers becomes cleaner and rename
+them such that their intent becomes clearer, and we're good to go:
+
+`skip_to_start_of_change` --> `read_next_target_line` 
+
+`verify_possible_y_line` --> `is_starting_replacement`
+
+`read_from_change_file` --> `read_replacement_line`
+
+`check_read_all_changes` --> `check_if_processed_all_changes`
+
+We also clean up `get_line`, which becomes much easier to understand when one analyzes carefully when 
+`in_str` is `web_str` and when `change_str`. We also realize that after a call to `get_line` there is a
+check to `web_file.eof()`. So we move that check into `get_line` and make it return a bool. Finally,
+we rename `check_change` to the far more descriptive `match_target_lines_and_choose_stream`. As the name
+indicates, it now returns the stream to continue with.
+

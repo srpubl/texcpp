@@ -52,6 +52,8 @@ public:
         virtual void on_name_not_found (std::u8string_view) = 0;
         virtual void on_stack_overflow () = 0;
         virtual void on_invalid_ilk () = 0;
+
+        virtual ~diagnostics () = default;
     };
 
 private:

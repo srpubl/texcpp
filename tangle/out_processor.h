@@ -10,6 +10,8 @@ public:
     struct diagnostics
     {
         virtual void on_missing_sign_between_numbers () = 0;
+
+        virtual ~diagnostics () = default;
     };
 
 private:

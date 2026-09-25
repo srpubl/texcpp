@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include "error.h"
 #include "input_line_buffer.h"
 
@@ -12,14 +13,17 @@ public:
         error_manager &err;
 
         diagnostics (error_manager &err) : err (err) {} 
+        
+        virtual ~diagnostics () = default;
 
         virtual void on_line_too_long () = 0;
     };
 
-private:
+protected:
     diagnostics &
-    _diag;
+    diagnose;
 
+private:
     input_line_buffer 
     _line;
 
@@ -33,11 +37,11 @@ private:
     _line_number = 0;
 
 public:
-    in_stream (diagnostics &diag, size_t max_line_size) : _diag (diag), _line (max_line_size) {}
+    in_stream (diagnostics &diag, size_t max_line_size) : diagnose (diag), _line (max_line_size) {}
 
     auto &line () { return _line; }
     auto line_number () { return _line_number; }
-    auto &err () { return _diag.err; }
+    auto &err () { return diagnose.err; }
     auto eol () const { return _loc > _line.limit (); }
     auto eof () const { return _file.eof(); }
     auto end_of_content () const { return _loc >= _line.limit (); }
@@ -55,7 +59,7 @@ public:
     auto read_line ()
     {
         ++_line_number;
-        return _line.read_from (_file, [this]() { _diag.on_line_too_long(); });
+        return _line.read_from (_file, [this]() { diagnose.on_line_too_long(); });
     }
 
     void open (std::filesystem::path web_file_name) 
