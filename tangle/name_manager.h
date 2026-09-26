@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <string_view>
 
 #include "config.h"
@@ -9,7 +10,7 @@
 #include "utility/string_storage.h"
 #include "name.h"
 
-using on_add_string_t = config::index_t (*) (std::u8string_view id);
+using on_add_string_t = std::function <config::index_t ()>;
 
 using hash_bucket_name_t_link = util::hash_bucket<name_t, &name_t::link, &name_t::set_link>;
 using hash_bucket_name_t_chop_link = util::hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;

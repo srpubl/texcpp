@@ -39,10 +39,6 @@ struct output_state
 
 }
 
-constexpr auto number        = 0x80;  /// code returned by get_output when next output is numeric
-constexpr auto module_number = 0x81;  /// code returned by get_output for module numbers
-constexpr auto identifier    = 0x82;  /// code returned by get_output for identifiers
-
 class output_token_stream 
 {
 public:

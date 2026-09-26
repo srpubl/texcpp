@@ -707,3 +707,21 @@ check to `web_file.eof()`. So we move that check into `get_line` and make it ret
 we rename `check_change` to the far more descriptive `match_target_lines_and_choose_stream`. As the name
 indicates, it now returns the stream to continue with.
 
+### Class `name_scanner`
+
+This simple class combines `current_id` (renamed to `content`) and `double_chars` along with 
+`get_identifier` and `get_preprocessed_string`. A pecularity is that the `in_stream` can change between 
+calls (not within one) and thus cannot be stored within the class. This extends to the `diagnostics` as
+well, so diagnostic functions need to get the respective `error_manager` as parameter (as taken from 
+`in_stream.err ()`).
+
+We also add the `name_manager` as a reference member because `content` is exclusively used to lookup the 
+name. We thus don't have to expose it but return the respective `name_t` instead. 
+
+For a similar reason, we add `string_pool` as a reference member: `double_chars` is used only for making
+sure the right length is calculated when a string is added. As this relates always to `content` both 
+members need to be in sync. There is hence logically no point in having `id` passed to 
+`add_to_string_pool` (the body of `on_add_string`) because it always must be `content`. We thus remove
+this parameter from the callback.
+
+

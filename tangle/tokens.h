@@ -14,3 +14,6 @@ constexpr auto double_dot    = char8_t {0x20};   /// denotes .. in Pascal
 constexpr auto check_sum     = char8_t {0x7D};  /// @$ denotes the string pool check sum
 constexpr auto join          = char8_t {0x7F};  /// @& is the item concatenation operator
 
+constexpr auto number        = 0x80;  /// code returned by get_output when next output is numeric
+constexpr auto module_number = 0x81;  /// code returned by get_output for module numbers
+constexpr auto identifier    = 0x82;  /// code returned by get_output for identifiers

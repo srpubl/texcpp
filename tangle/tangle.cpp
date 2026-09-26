@@ -5,6 +5,7 @@
 #include <print>
 #include <string_view>
 
+#include "name.h"
 #include "pascal/array.h"
 #include "pascal/range.h"
 
@@ -15,6 +16,7 @@
 #include "error.h"
 #include "in_stream.h"
 #include "name_manager.h"
+#include "name_scanner.h"
 #include "out_buffer.h"
 #include "out_processor.h"
 #include "output_token_reducer.h"
@@ -28,6 +30,7 @@
 #include "diagnostics/in_error_manager.h"
 #include "diagnostics/in_stream_diagnostics.h"
 #include "diagnostics/name_manager_diagnostics.h"
+#include "diagnostics/name_scanner_diagnostics.h"
 #include "diagnostics/out_buffer_diagnostics.h"
 #include "diagnostics/out_error_manager.h"
 #include "diagnostics/out_processor_diagnostics.h"
@@ -109,12 +112,7 @@ text_manager text_mgr;
 // section 48
 // section 49
 // section 50
-
-auto double_chars     = size_t {};
-auto current_id       = std::u8string_view {};
-
 // section 51, 52 not required
-
 // section 53
 // section 54
 // section 55
@@ -132,18 +130,20 @@ auto str_pool_diag = string_pool_diagnostics {term, web_err};
 auto str_pool = string_pool {str_pool_diag};
 
 auto
-on_add_string (std::u8string_view id) -> index_t
-{
-    if (id.length () - double_chars == 2)  // single-character string
-        return id [1];
-
-    auto length = id.length () - (double_chars + 1_r);
-
-    return str_pool.add (id, length);
-}
+on_add_string () -> index_t;
 
 auto name_mgr_diag = name_manager_diagnostics {web_err};
 auto name_mgr     = name_manager {name_mgr_diag, on_add_string};
+
+auto str_scnr_diag = name_scanner_diagnostics {};
+auto str_scnr = name_scanner {str_scnr_diag, str_pool, name_mgr};
+
+auto
+on_add_string () -> index_t
+{
+    return str_scnr.add_string_to_pool ();
+}
+
 
 
 // section 65
@@ -462,10 +462,6 @@ name_t * cur_module_name;
 bool    scanning_hex = false;  /// are we scanning a hexadecimal constant
 
 // section 145 - 155
-ascii_code_t
-get_identifier (ascii_code_t c);
-ascii_code_t
-get_preprocessed_string ();
 void
 scan_module_name ();
 
@@ -505,11 +501,11 @@ get_next ()
         }
 
         if (is_alpha (c))
-            return get_identifier (c);
+            return str_scnr.scan_identifier (*in_str);
 
         switch (c)
         {
-        case u8'"': return get_preprocessed_string ();
+        case u8'"': return str_scnr.scan_preprocessed_string (*in_str);
 
         case u8'@':
             c = control_code (in_str -> get ());
@@ -561,69 +557,7 @@ get_next ()
 }
 
 // section 148
-ascii_code_t
-get_identifier (ascii_code_t c)
-{
-    if (in_str -> tell () > 1
-        && (c == u8'E' || c == u8'e')
-        && is_digit (in_str -> peek_back (2)) // the char before c
-    )  
-        return u8'E';
-
-    ascii_code_t d;
-    auto id_first = in_str -> tell () - 1;
-    do
-    {
-        d = in_str -> get ();
-    }
-    while (is_alphanumeric (d) || d == u8'_');
-    in_str -> retreat ();
-
-    if (in_str -> tell () > id_first + 1)
-    {
-        c          = identifier;
-        current_id = {& in_str -> line () [id_first], static_cast<size_t> (in_str -> tell () - id_first)};
-    }
-
-    return c;
-}
-
 // section 149
-ascii_code_t
-get_preprocessed_string ()
-{
-    ascii_code_t d;
-    double_chars  = 0_r;
-    auto id_first = in_str -> tell () - 1_r;
-
-    do
-    {
-        d = in_str -> get ();
-        if (d == u8'"' || d == u8'@')
-        {
-            if (in_str -> peek () == d)
-            {
-                in_str -> advance ();
-                d = 0;
-                ++double_chars;
-            }
-            else if (d == u8'@')
-            {
-                in_str -> err ().err_print ("! Double @ sign missing");
-            }
-        }
-        else if (in_str -> eol ())
-        {
-            in_str -> err ().err_print ("! String constant didn't end");
-            d = u8'"';
-        }
-    }
-    while (d != u8'"');
-
-    current_id = {& in_str -> line () [id_first], static_cast<size_t> (in_str -> tell () - 1 - id_first)};
-    return identifier;
-}
-
 // section 151
 
 /// Puts module name in mod_text[1..length]
@@ -790,7 +724,7 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 
     case identifier:
     {
-        auto &name = name_mgr.lookup (normal, current_id);
+        auto &name = str_scnr.retrieve_name (normal);
         if (name.ilk () != numeric)
         {
             next_control = u8'*';  // leads to error
@@ -912,7 +846,7 @@ scan_replacement (uint8_t type)
 
         case identifier:
         {
-            auto &name = name_mgr.lookup (normal, current_id);
+            auto &name = str_scnr.retrieve_name (normal);
             text_mgr.append_to_next_new (0x8000 + name_mgr.index_of (name));
             break;
         }
@@ -1072,7 +1006,7 @@ copy_verbatim_from_buffer_to_text_mgr ()
 void
 define_macro (ilk_value type)
 {
-    auto &name = name_mgr.lookup (type, current_id);
+    auto &name = str_scnr.retrieve_name (type);
     auto &replacement_text = scan_replacement (type);
     name.set_replacement_text (replacement_text);
     replacement_text.set_continuation (&text_mgr.root());
@@ -1126,7 +1060,7 @@ scan_definition_part ()
 
         if (next_control == u8'=')
         {
-            name_mgr.lookup (numeric, current_id).set_number (scan_numeric());
+            str_scnr.retrieve_name (numeric).set_number (scan_numeric());
             continue;
         }
 

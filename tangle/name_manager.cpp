@@ -74,7 +74,7 @@ name_manager::lookup (ilk_value ilk, std::u8string_view id)
     if (id [0] == u8'"')
     {
         new_name.set_ilk (numeric);
-        new_name.set_number (on_add_string (id));
+        new_name.set_number (on_add_string ());
     }
     else
     {
