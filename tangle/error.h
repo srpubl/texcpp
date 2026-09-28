@@ -36,6 +36,8 @@ struct error_state
     inline void
     mark_fatal ()
     { history = fatal_message; }
+
+    inline int exit_code () { return history; }
 };
 
 class error_manager
@@ -47,8 +49,6 @@ class error_manager
 
     ::terminal &
     terminal () const { return state.term; }
-
-    inline int exit_code () { return state.history; }
 
     inline void
     error ()

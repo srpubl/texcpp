@@ -724,4 +724,33 @@ members need to be in sync. There is hence logically no point in having `id` pas
 `add_to_string_pool` (the body of `on_add_string`) because it always must be `content`. We thus remove
 this parameter from the callback.
 
+### Class `patched_in_stream`
+
+To simplify the functions that use the web stream or the change stream, we created an intermediary class
+`patched_in_stream` with the exaxt same interface as `in_stream`. It contains `web_str` and `change_str`
+as members plus the pointer `active_str` (which was `in_str`) to choose the stream that the current line
+is read from.  
+
+The function `get_line` will be the new `patched_in_stream::read_line`, `match_lines_and_choose_stream` 
+becomes a private function in `patched_in_stream`. All other functions are just very small forwards to
+`active_str`. Besides saving exposing `active_str` to callers (along with the necessary housekeeping due
+to possible changes within `get_line`), the big advantage is that we could replace all functions that 
+use `patched_in_stream` with templated versions that take either `in_stream` or `patched_in_stream` as
+a template parameter.
+
+In general, though, we will stick to principle of least concern: functions that only read within a line,
+i.e., that never call `read_line` will get `in_stream` as a parameter. Note that we refrain from making
+`patched_in_stream` a member as that would reduce the readibility. Keeping the stream as a parameter
+clearly shows that the scanning functions work on that stream.
+
+### Class `module_name_scanner`
+
+This class combines `scan_module_name` and `put_module_name_in_mod_text` as well as `mod_text`, which we
+replace with the `static_vector` `mod_name`. We also shuffle code between the two functions, mainly to
+make the latter easier (we can use returns to jump out of the loop from within the switch). We also
+replace the variable `cur_module_name` with the member getter `current_module_name`, which performs lazy
+evaluation.
+
+
+
 

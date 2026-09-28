@@ -5,17 +5,18 @@
 class change_stream : public in_stream  
 {
 public:
-    using in_stream::in_stream;    
-
     struct diagnostics : public virtual in_stream::diagnostics
     {
         virtual void on_missing_x () = 0;
         virtual void on_missing_y () = 0;
         virtual void on_missing_z () = 0;
         virtual void on_ended_after_x () = 0;
+        virtual void on_ended_before_y () = 0;
         virtual void on_ended_without_z () = 0;
         virtual void on_extra_change () = 0;
     };
+
+    change_stream (diagnostics &diagnose, size_t max_line_size) : in_stream (diagnose, max_line_size) {}    
 
 private:
     auto & diagnose () { return dynamic_cast <diagnostics &> (in_stream::diagnose); }
@@ -67,7 +68,7 @@ private:
 
 public:
     void
-    read_next_target_line ()
+    seek_target_line ()
     {
         if (!skip_to_start_of_change ())
             return;
@@ -88,6 +89,17 @@ public:
     }
 
     bool
+    read_target_line ()
+    {
+        if (read_line ())
+            return true;
+
+        diagnose ().on_ended_before_y ();
+        line ().clear ();
+        return false;
+    }
+
+    bool
     read_replacement_line ()
     {
         if (!read_line ())
@@ -98,7 +110,7 @@ public:
 
         switch (get_change_control_letter ())
         {
-        case u8'z': read_next_target_line (); return false;
+        case u8'z': seek_target_line (); return false;
         case u8'x':
         case u8'y': seek (2); diagnose ().on_missing_z ();
         }
