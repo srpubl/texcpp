@@ -738,10 +738,8 @@ to possible changes within `get_line`), the big advantage is that we could repla
 use `patched_in_stream` with templated versions that take either `in_stream` or `patched_in_stream` as
 a template parameter.
 
-In general, though, we will stick to principle of least concern: functions that only read within a line,
-i.e., that never call `read_line` will get `in_stream` as a parameter. Note that we refrain from making
-`patched_in_stream` a member as that would reduce the readibility. Keeping the stream as a parameter
-clearly shows that the scanning functions work on that stream.
+Note that we refrain from making `patched_in_stream` a member as that would reduce the readibility. 
+Keeping the stream as a parameter clearly shows that the scanning functions work on that stream.
 
 ### Class `module_name_scanner`
 
@@ -751,6 +749,36 @@ make the latter easier (we can use returns to jump out of the loop from within t
 replace the variable `cur_module_name` with the member getter `current_module_name`, which performs lazy
 evaluation.
 
+### Class `input_token_stream`
+
+This class now combines `patched_in_stream`, `name_scanner` and `module_scanner` into a stream that
+provides the input tokens to the system via its method `get` (which was `get_next_impl`). If this method
+returns the token `module_name`, the actual module name just scanned can be obtained from 
+`current_module_name`; analogously `identifier` corresponds with `current_identifier`. Both methods
+return `name_t &`, managed by `name_manager`.
+
+We also move `skip_ahead` (renamed to `get_next_control_code`) as public into it as well as
+`skip_comment`, `control_code` and `compress_if` as private. All of them would not really need to be
+members but in this way we can encapsulate the `patched_in_stream` and in particular we can use the
+same `diagnostics` class, avoiding a too fine-granular split of functionality. We take the opportunity
+to simplify the logic, primarily replacing if-else-if constructs with switches.
+
+All calls of the function `get_next` (except for one) assign the return value to `next_control`. We
+leave the exception to this pattern but still move the assignment into `get_next` while also returning
+it. 
+
+
+### Cleaning up the interaction between `name_manager` and `string_pool`
+
+For a long time, we had a callback in `name_manager` called `on_add_string` because back then we didn't
+have a `string_pool`. Now that we have it, we replace this callback with a reference to `string_pool`
+and change the signature of `lookup` to pass also the `double_chars` because the actual length wihtout
+double chars is now calculated in `string_pool::add`. Note that this is actually just a minor
+performance improvement avoiding to count the double chars twice. However, it could entirely be done in
+`string_pool::add` without this parameter. To avoid scanning the string twice in that method, the actual
+length could be written retroactively into the first two chars of the output line after the string was
+entirely written but not flushed. This would however require a review of `pascal::text_file` so we don't
+do that right now.
 
 
 

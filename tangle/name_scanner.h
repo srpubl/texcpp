@@ -1,11 +1,8 @@
 #pragma once
 
-#include "config.h"
-
 #include "error.h"
-#include "in_stream.h"
+#include "patched_in_stream.h"
 #include "name_manager.h"
-#include "string_pool.h"
 
 class name_scanner 
 {
@@ -20,7 +17,6 @@ public:
 
 private:
     diagnostics &diagnose;
-    string_pool &str_pool;
     name_manager &name_mgr;
 
     size_t 
@@ -30,27 +26,16 @@ private:
     content       = {};
 
 public:
-    name_scanner (diagnostics & diagnose, string_pool &str_pool, name_manager &name_mgr) 
-    : diagnose (diagnose), str_pool (str_pool), name_mgr (name_mgr) {}
-
-    auto
-    add_string_to_pool () -> config::index_t
-    {
-        if (content.length () - double_chars == 2)  // single-character string
-            return content [1];
-
-        auto length = content.length () - (double_chars + 1);
-
-        return str_pool.add (content, length);
-    }
+    name_scanner (diagnostics & diagnose, name_manager &name_mgr) 
+    : diagnose (diagnose), name_mgr (name_mgr) {}
 
     char8_t
-    scan_identifier (in_stream &in_str);
+    scan_identifier (patched_in_stream &in_str);
 
     char8_t
-    scan_preprocessed_string (in_stream &in_str);
+    scan_preprocessed_string (patched_in_stream &in_str);
 
     auto &
-    retrieve_name (ilk_value type)  { return name_mgr.lookup (type, content); }
+    retrieve_name (ilk_value type)  { return name_mgr.lookup (type, content, double_chars); }
 };
 

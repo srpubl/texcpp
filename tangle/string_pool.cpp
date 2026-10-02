@@ -12,8 +12,13 @@ string_pool::initialize (std::filesystem::path const &pool_file_name)
 
 
 auto
-string_pool::add (std::u8string_view str, size_t actual_length) -> config::index_t
+string_pool::add (std::u8string_view str, size_t double_chars) -> config::index_t
 {
+    if (str.length () - double_chars == 2)  // single-character string
+        return str [1];
+
+    auto actual_length = str.length () - (double_chars + 1);
+
     if (actual_length > 99)
     {
         diagnose.on_string_too_long ();

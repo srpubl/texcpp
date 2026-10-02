@@ -1,16 +1,14 @@
 #pragma once
 
 #include <array>
-#include <functional>
 #include <string_view>
 
 #include "config.h"
 
+#include "string_pool.h"
 #include "utility/hash_bucket.h"
 #include "utility/string_storage.h"
 #include "name.h"
-
-using on_add_string_t = std::function <config::index_t ()>;
 
 using hash_bucket_name_t_link = util::hash_bucket<name_t, &name_t::link, &name_t::set_link>;
 using hash_bucket_name_t_chop_link = util::hash_bucket<name_t, &name_t::chop_link, &name_t::set_chop_link>;
@@ -38,7 +36,7 @@ public:
 
 private:
     diagnostics &diagnose;
-    on_add_string_t on_add_string;
+    string_pool &str_pool;
 
     util::string_storage <name_t> storage;
     std::array<hash_bucket_name_t_link, config::hash_size> hash_bucket = {};
@@ -46,15 +44,16 @@ private:
     name_t *root = nullptr;
 
 public:
-    name_manager (diagnostics &diagnose, on_add_string_t on_add_string) 
-    : diagnose (diagnose), on_add_string (on_add_string) {}
+    name_manager (diagnostics &diagnose, string_pool &str_pool) 
+    : diagnose (diagnose), str_pool (str_pool) {}
 
     void
     initialize (size_t max_chars, size_t max_names);
 
     /// Finds current identifier if it exists or stores it.
+    /// When stored double_chars is used to determine the actual length when processed in string_pool
     auto
-    lookup (ilk_value t, std::u8string_view id) -> name_t &;
+    lookup (ilk_value t, std::u8string_view id, size_t double_chars = 0) -> name_t &;
 
     auto
     lookup_module (std::u8string_view module_name) -> name_t &;

@@ -2,7 +2,7 @@
 #include "tokens.h"
 
 char8_t
-name_scanner::scan_identifier (in_stream &in_str)
+name_scanner::scan_identifier (patched_in_stream &in_str)
 {
     char8_t c = in_str.peek_back ();
     if (in_str.tell () > 1
@@ -30,7 +30,7 @@ name_scanner::scan_identifier (in_stream &in_str)
 }
 
 char8_t
-name_scanner::scan_preprocessed_string (in_stream &in_str)
+name_scanner::scan_preprocessed_string (patched_in_stream &in_str)
 {
     char8_t d;
     double_chars  = 0;

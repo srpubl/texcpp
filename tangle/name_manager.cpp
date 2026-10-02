@@ -48,7 +48,7 @@ name_manager::initialize (size_t max_chars, size_t max_names)
 }
 
 name_t &
-name_manager::lookup (ilk_value ilk, std::u8string_view id)
+name_manager::lookup (ilk_value ilk, std::u8string_view id, size_t double_chars)
 {
     auto  hash   = compute_hash_code (id);
     auto &bucket = hash_bucket [hash];
@@ -74,7 +74,7 @@ name_manager::lookup (ilk_value ilk, std::u8string_view id)
     if (id [0] == u8'"')
     {
         new_name.set_ilk (numeric);
-        new_name.set_number (on_add_string ());
+        new_name.set_number (str_pool.add (id, double_chars));
     }
     else
     {

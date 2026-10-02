@@ -2,7 +2,7 @@
 
 #include "module_name_scanner.h"
 
-class module_name_scanner_diagnostics : public module_name_scanner::diagnostics
+struct module_name_scanner_diagnostics : public virtual module_name_scanner::diagnostics
 {
     virtual void 
     on_too_long (error_manager &err, std::u8string_view name) override 

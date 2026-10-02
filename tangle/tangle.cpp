@@ -7,10 +7,9 @@
 
 #include "character.h"
 #include "error.h"
-#include "module_name_scanner.h"
+#include "input_token_stream.h"
 #include "name.h"
 #include "name_manager.h"
-#include "name_scanner.h"
 #include "out_buffer.h"
 #include "out_processor.h"
 #include "output_token_reducer.h"
@@ -25,9 +24,8 @@
 #include "diagnostics/change_stream_diagnostics.h"
 #include "diagnostics/in_error_manager.h"
 #include "diagnostics/in_stream_diagnostics.h"
-#include "diagnostics/module_name_scanner_diagnostics.h"
+#include "diagnostics/input_token_stream_diagnostics.h"
 #include "diagnostics/name_manager_diagnostics.h"
-#include "diagnostics/name_scanner_diagnostics.h"
 #include "diagnostics/out_buffer_diagnostics.h"
 #include "diagnostics/out_error_manager.h"
 #include "diagnostics/out_processor_diagnostics.h"
@@ -118,20 +116,8 @@ in_web_error_manager change_err {err_state};
 auto str_pool_diag = string_pool_diagnostics {term, web_err};
 auto str_pool = string_pool {str_pool_diag};
 
-auto
-on_add_string () -> index_t;
-
 auto name_mgr_diag = name_manager_diagnostics {web_err};
-auto name_mgr     = name_manager {name_mgr_diag, on_add_string};
-
-auto str_scnr_diag = name_scanner_diagnostics {};
-auto str_scnr = name_scanner {str_scnr_diag, str_pool, name_mgr};
-
-auto
-on_add_string () -> index_t
-{
-    return str_scnr.add_string_to_pool ();
-}
+auto name_mgr     = name_manager {name_mgr_diag, str_pool};
 
 // section 65
 // section 66
@@ -235,241 +221,13 @@ patched_in_stream in_str {patched_in_diag, web_str_diag, change_str_diag, config
 // section 138
 // section 139
 
-/// control code of no interest to TANGLE
-constexpr auto ignore       = ascii_code_t {0};
-constexpr auto control_text = ascii_code_t {0x83};  /// control code for ‘@t’, ‘@^’, etc.
-constexpr auto format       = ascii_code_t {0x84};  /// control code for ‘@f’
-constexpr auto definition   = ascii_code_t {0x85};  /// control code for ‘@d’
-constexpr auto begin_pascal = ascii_code_t {0x86};  /// control code for ‘@p’
-constexpr auto module_name  = ascii_code_t {0x87};  /// control code for ‘@<’
-constexpr auto new_module   = ascii_code_t {0x88};  /// control code for ‘@ ’ and ‘@*’
-
 // Declared in module 171 but needed here already
-int module_count;
-
-ascii_code_t
-control_code (ascii_code_t c)
-{
-    switch (c)
-    {
-    case u8'@'   : return u8'@';
-    case u8'\''  : return octal;
-    case u8'"'   : return hex;
-    case u8'$'   : return check_sum;
-    case u8' '   :
-    case tab_mark: return new_module;
-
-    case u8'*':
-        term.print ("*{}", module_count + 1);
-        term.update ();
-        return new_module;
-
-    case u8'D':
-    case u8'd' : return definition;
-
-    case u8'F' :
-    case u8'f' : return format;
-
-    case u8'{' : return begin_comment;
-    case u8'}' : return end_comment;
-
-    case u8'P' :
-    case u8'p' : return begin_pascal;
-
-    case u8':' :
-    case u8'T' :
-    case u8't' :
-    case u8'^' :
-    case u8'.' : return control_text;
-
-    case u8'&' : return join;
-    case u8'<' : return module_name;
-    case u8'=' : return verbatim;
-    case u8'\\': return force_line;
-
-    default    : return ignore;
-    }
-}
+size_t module_count;
 
 // section 140
-// Skips all characters until the next @ or eof
-// Returns the control code if one was found
-ascii_code_t
-skip_ahead ()
-{
-    while (true)
-    {
-        if (in_str.eol ())
-        {
-            if (!in_str.read_line ())
-                return new_module;
-        }
-
-        // Put @ as marker so we don't have to check also for the end
-        in_str.line ().mark_end (u8'@');
-        while (in_str.peek () != u8'@') { in_str.advance (); }  // find the next marker
-
-        // If we find a @ (other than our own marker) we check the respective control code
-        if (!in_str.eol ())
-        {
-            in_str.advance (2);
-            auto ascii = in_str.peek_back ();
-            auto c     = control_code (ascii);
-            if (c != ignore || ascii == u8'>')
-                return c;
-        }
-    }
-}
-
 // section 141, 142
-
-/// Skips to next unmatched '}'
-void
-skip_comment ()
-{
-    int balance = 0;
-    while (true)
-    {
-        if (in_str.eol ())
-        {
-            if (!in_str.read_line ())
-            {
-                in_str.err ().err_print ("! Input ended in mid-comment");
-                return;
-            }
-        }
-
-        auto c = in_str.get();
-
-        if (c == u8'@')
-        {
-            c = in_str.peek ();
-            if (c == u8' ' || c == tab_mark || c == u8'*')
-            {
-                in_str.err ().err_print ("! Section ended in mid-comment");
-                in_str.retreat ();
-                return;
-            }
-            in_str.advance ();
-        }
-        else if (c == u8'\\' && in_str.peek () != u8'@')
-        {
-            in_str.advance ();
-        }
-        else if (c == u8'{')
-        {
-            ++balance;
-        }
-        else if (c == u8'}')
-        {
-            if (balance == 0)
-                return;
-
-            --balance;
-        }
-    }
-}
-
 // section 143, 144
-
-/// name of module just scanned
-bool    scanning_hex = false;  /// are we scanning a hexadecimal constant
-
 // section 145 - 155
-
-module_name_scanner_diagnostics mod_name_scnr_diag;
-module_name_scanner mod_name_scnr {mod_name_scnr_diag, name_mgr};
-
-inline bool
-compress_if (char8_t &c, char8_t match, char8_t compressed)
-{
-    if (in_str.peek () != match)
-        return false;
-
-    if (!in_str.eol ())
-    {
-        c = compressed;
-        in_str.advance ();
-    }
-
-    return true;
-}
-
-uint8_t
-get_next ()
-{
-    while (true)
-    {
-        if (in_str.eol ())
-        {
-            if (!in_str.read_line ())
-                return new_module;
-        }
-        auto c = in_str.get ();
-
-        if (scanning_hex)
-        {
-            if (is_hex (c))
-                return c;
-
-            scanning_hex = false;
-        }
-
-        if (is_alpha (c))
-            return str_scnr.scan_identifier (in_str.active ());
-
-        switch (c)
-        {
-        case u8'"': return str_scnr.scan_preprocessed_string (in_str.active ());
-
-        case u8'@':
-            c = control_code (in_str.get ());
-            if (c == ignore)
-                continue;
-
-            if (c == hex)
-            {
-                scanning_hex = true;
-            }
-            else if (c == module_name)
-            {
-                mod_name_scnr.scan_module_name (in_str);
-            }
-            else if (c == control_text)
-            {
-                do { c = skip_ahead (); }
-                while (c == u8'@');
-
-                if (in_str.peek_back () != u8'>')
-                {
-                    in_str.err ().err_print ("! Improper @ within control text");
-                }
-
-                continue;
-            }
-            return c;
-
-        // section 147
-        case u8'.': compress_if (c, '.', double_dot) || compress_if (c, ')', u8']'); return c;
-        case u8':': compress_if (c, '=', left_arrow); return c;
-        case u8'=': compress_if (c, '=', equivalence_sign); return c;
-        case u8'>': compress_if (c, '=', greater_or_equal); return c;
-        case u8'<': compress_if (c, '=', less_or_equal) || compress_if (c, '>', not_equal); return c;
-        case u8'(': compress_if (c, '*', begin_comment) || compress_if (c, '.', u8'['); return c;
-        case u8'*': compress_if (c, ')', end_comment); return c;
-        case u8' ':
-        case tab_mark: continue;
-        case u8'{': skip_comment (); continue;
-        case u8'}': in_str.err ().err_print ("! Extra }}"); continue;
-
-        default:
-            if (c >= 128)
-                continue;
-
-            return c;
-        }
-    }
-}
 
 // section 148
 // section 149
@@ -480,7 +238,16 @@ bool
 end_of_definition (ascii_code_t c)
 { return c >= format; }
 
-ascii_code_t next_control;
+auto in_tok_str_diag = input_token_stream_diagnostics {term, module_count};
+auto in_tok_str = input_token_stream {in_tok_str_diag, in_str, name_mgr};
+
+char8_t next_control = 0;
+
+char8_t
+get_next ()
+{
+    return next_control = in_tok_str.get ();
+}
 
 // section 157, 158, 159, 160, 161, 162
 
@@ -502,9 +269,8 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
         do
         {
             val          = 10 * val + next_control - u8'0';
-            next_control = get_next ();
         }
-        while (is_digit (next_control));
+        while (is_digit (get_next ()));
 
         accumulator += next_sign * val;
         next_sign = 1;
@@ -518,9 +284,8 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
         do
         {
             val          = 8 * val + next_control - u8'0';
-            next_control = get_next ();
         }
-        while (is_octal (next_control));
+        while (is_octal (get_next ()));
 
         accumulator += next_sign * val;
         next_sign = 1;
@@ -535,9 +300,8 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
                 next_control += u8'0' - (u8'A' - 10);
             }
             val          = 16 * val + next_control - u8'0';
-            next_control = get_next ();
         }
-        while (is_hex (next_control));
+        while (is_hex (get_next ()));
 
         accumulator += next_sign * val;
         next_sign = 1;
@@ -545,7 +309,7 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 
     case identifier:
     {
-        auto &name = str_scnr.retrieve_name (normal);
+        auto &name = in_tok_str.current_identifier (normal);
         if (name.ilk () != numeric)
         {
             next_control = u8'*';  // leads to error
@@ -573,13 +337,13 @@ scan_numeric_one (int &accumulator, int &next_sign) -> scan_numeric_cases
 
     default:
         in_str.err ().err_print ("! Improper numeric definition will be flushed");
-        do { next_control = skip_ahead (); }
+        do { next_control = in_tok_str.get_next_control_code (); }
         while (!end_of_definition (next_control));
 
         if (next_control == module_name)  // we want to scan the module name too
         {
             in_str.retreat (2);
-            next_control = get_next ();
+            get_next ();
         }
 
         accumulator = 0;
@@ -597,7 +361,7 @@ scan_numeric ()
     scan_numeric_cases state;
     do
     {
-        next_control = get_next ();
+        get_next ();
         do { state = scan_numeric_one (accumulator, next_sign); }
         while (state == scan_numeric_cases::reswitch);
     }
@@ -626,19 +390,16 @@ auto &
 scan_replacement (uint8_t type)
 {
     int     balance = 0;  /// left parentheses minus right parentheses
-    index_t a;
-
     bool    done = false;
 
     do
     {
-        a = get_next ();
-
-        switch (a)
+        auto ch = get_next ();
+        switch (ch)
         {
         case u8'(': 
             ++balance; 
-            text_mgr.append_to_next_new (a);
+            text_mgr.append_to_next_new (static_cast <text_manager::char_type> (ch));
             break;
 
         case u8')':
@@ -650,7 +411,7 @@ scan_replacement (uint8_t type)
             {
                 --balance;
             }
-            text_mgr.append_to_next_new (a);
+            text_mgr.append_to_next_new (static_cast <text_manager::char_type> (ch));
             break;
 
         case u8'\'': 
@@ -658,16 +419,13 @@ scan_replacement (uint8_t type)
             break;
 
         case u8'#':
-            if (type == parametric)
-            {
-                a = param;
-            }
-            text_mgr.append_to_next_new (a);
+            text_mgr.append_to_next_new (static_cast <text_manager::char_type> (
+                type == parametric ? param: ch));
             break;
 
         case identifier:
         {
-            auto &name = str_scnr.retrieve_name (normal);
+            auto &name = in_tok_str.current_identifier (normal);
             text_mgr.append_to_next_new (0x8000 + name_mgr.index_of (name));
             break;
         }
@@ -675,7 +433,8 @@ scan_replacement (uint8_t type)
         case module_name:
             if (type == module_name)
             {
-                text_mgr.append_to_next_new (0xA800 + name_mgr.index_of (mod_name_scnr.current_module_name()));
+                auto index = name_mgr.index_of (in_tok_str.current_module_name ());
+                text_mgr.append_to_next_new (0xA800 + index);
                 break;
             }
             done = true;
@@ -701,13 +460,12 @@ scan_replacement (uint8_t type)
         case new_module: done = true; break;
         
         default:
-            text_mgr.append_to_next_new (a);
+            text_mgr.append_to_next_new (static_cast <text_manager::char_type> (ch));
             break;
         }
     }
     while (!done);
 
-    next_control = a & 0xFF;
     ensure_parantheses_balance (balance);
 
     return text_mgr.add_next_new ();
@@ -790,14 +548,11 @@ copy_verbatim_from_buffer_to_text_mgr ()
     {
         if (in_str.peek () == u8'@')
         {
-            if (!in_str.end_of_content ())
+            if (!in_str.end_of_content () && in_str.peek_ahead () == u8'@')
             {
-                if (in_str.peek_ahead () == u8'@')
-                {
                     text_mgr.append_to_next_new (U'@');
                     in_str.advance (2);
                     continue;
-                }
             }
         }
         else
@@ -827,7 +582,7 @@ copy_verbatim_from_buffer_to_text_mgr ()
 void
 define_macro (ilk_value type)
 {
-    auto &name = str_scnr.retrieve_name (type);
+    auto &name = in_tok_str.current_identifier (type);
     auto &replacement_text = scan_replacement (type);
     name.set_replacement_text (replacement_text);
     replacement_text.set_continuation (&text_mgr.root());
@@ -860,56 +615,45 @@ scan_definition_part ()
     {
         while (next_control <= format)
         {
-            next_control = skip_ahead ();
+            next_control = in_tok_str.get_next_control_code ();;
             if (next_control == module_name)  // we want to scan the module name too
             {
                 in_str.retreat (2);
-                next_control = get_next ();
+                get_next ();
             }
         }
 
         if (next_control != definition)
             return;
 
-        next_control = get_next ();  // get identifier name
-        if (next_control != identifier)
+        if (get_next () != identifier)
         {
             in_str.err ().err_print ("! Definition flushed must start with identifier of length > 1");
             continue;
         }
-        next_control = get_next ();  // get token after the identifier
-
-        if (next_control == u8'=')
+ 
+        switch (get_next ())
         {
-            str_scnr.retrieve_name (numeric).set_number (scan_numeric());
+        case u8'=':
+            in_tok_str.current_identifier (numeric).set_number (scan_numeric());
             continue;
-        }
 
-        if (next_control == equivalence_sign)
-        {
+        case equivalence_sign:
             define_macro (simple);
             continue;
-        }
 
-        if (next_control == u8'(')
-        {
-            next_control = get_next ();
-            if (next_control == u8'#')
+        case u8'(':
+            if (get_next () == u8'#'
+             && get_next () == u8')')
             {
-                next_control = get_next ();
-                if (next_control == u8')')
+                switch (get_next ())
                 {
-                    next_control = get_next ();
-                    if (next_control == u8'=')
-                    {
-                        in_str.err ().err_print ("! Use == for macros");
-                        next_control = equivalence_sign;
-                    }
-                    if (next_control == equivalence_sign)
-                    {
-                        define_macro (parametric);
-                        continue;
-                    }
+                case u8'=':
+                    in_str.err ().err_print ("! Use == for macros");
+                    [[fallthrough]];
+                case equivalence_sign:
+                    define_macro (parametric);
+                    continue;
                 }
             }
         }
@@ -926,15 +670,14 @@ scan_pascal_part ()
     {
     case begin_pascal: break;
     case module_name:
-        scanned_module_name = &mod_name_scnr.current_module_name ();
+        scanned_module_name = &in_tok_str.current_module_name ();
 
-        do { next_control = get_next (); }
-        while (next_control == u8'+');
+        while (get_next () == u8'+') {}
 
         if (next_control != u8'=' && next_control != equivalence_sign)
         {
             in_str.err ().err_print ("! Pascal text flushed, = sign is missing");
-            do { next_control = skip_ahead (); }
+            do { next_control = in_tok_str.get_next_control_code (); }
             while (next_control != new_module);
             return;
         }
@@ -976,10 +719,10 @@ tangle (
 
     term.print_ln ("{}", config::banner);
 
-    scanning_hex = false;
+    in_tok_str.initialize();
     module_count = 0;
 
-    do { next_control = skip_ahead (); }
+    do { next_control = in_tok_str.get_next_control_code (); }
     while (next_control != new_module);
 
     while (!in_str.eof ()) { scan_module (); }
