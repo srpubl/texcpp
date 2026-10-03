@@ -129,6 +129,40 @@ public:
         records.pop_back ();
         chars.resize (chars.size () - last_length); 
     }
+
+    class builder
+    {
+    public:
+        explicit builder(string_storage &storage) noexcept
+        : storage (&storage) {}
+
+        builder (const builder &) = delete;
+        builder &operator= (const builder &) = delete;
+
+        builder & operator << (char_type c)
+        {
+            storage -> append_to_next_new (c);
+            return *this;
+        }
+
+        builder & operator << (string_view str)
+        {
+            storage -> append_to_next_new (str);
+            return *this;
+        }
+
+        record_type &
+        finalize ()
+        {
+            return storage -> add_next_new();
+        }
+
+    private:
+        string_storage *storage;
+    };
+
+    builder make_builder () noexcept { return builder (*this); }
+
 };
 
 }

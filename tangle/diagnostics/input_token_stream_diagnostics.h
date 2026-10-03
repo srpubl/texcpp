@@ -10,14 +10,13 @@ class input_token_stream_diagnostics
 , public virtual module_name_scanner_diagnostics
 {
     terminal &term;
-    size_t &module_count;
 
 public:
-    input_token_stream_diagnostics (terminal &term, size_t &module_count) 
-    : term (term), module_count (module_count) {}
+    input_token_stream_diagnostics (terminal &term) 
+    : term (term) {}
 
     void 
-    on_new_major_section () override
+    on_new_major_section (size_t module_count) override
     {
         term.print ("*{}", module_count + 1);
         term.update ();
@@ -34,6 +33,18 @@ public:
 
     void on_extra_brace (error_manager &err) override 
     { err.err_print ("! Extra }}"); }    
+
+    void on_single_marker_in_string (error_manager &err) override 
+    { err.err_print ("! You should double @ signs in strings"); }
+
+    void on_missing_end_of_string (error_manager &err) override 
+    { err.err_print ("! String didn't end"); }
+
+    void on_double_marker_in_verbatim (error_manager &err) override 
+    { err.err_print ("! You shouldn't double @ signs in verbatim strings"); }
+
+    void on_missing_end_of_verbatim (error_manager &err) override 
+    { err.err_print ("! Verbatim string didn't end"); }
 };
 
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 
 #include "utility/smallptr.h"
 #include "utility/string_record.h"
@@ -61,5 +63,8 @@ public:
             set_replacement_text (text);
         }
     }
+
+public:
+    using optional_reference = std::optional <std::reference_wrapper <name_t>>; 
 };
 

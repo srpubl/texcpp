@@ -4,6 +4,7 @@
 #include "error.h"
 #include "name_manager.h"
 #include "patched_in_stream.h"
+#include <optional>
 
 class module_name_scanner
 {
@@ -46,17 +47,20 @@ public:
         }
     }
 
-    name_t &
-    current_module_name () 
+    auto
+    current_module_name () -> name_t::optional_reference
     {        
         if (mod_name.size () < 4)
-            return name_mgr.no_name ();
+            return std::nullopt;
 
         if (std::equal (mod_name.end () - 3, mod_name.end (), u8"..."))
-            return name_mgr.lookup_prefix ({mod_name.begin (), mod_name.end () - 3} );
+            return name_mgr.lookup_prefix ({mod_name.begin (), mod_name.end () - 3});
                 
-        return name_mgr.lookup_module ( {mod_name.begin (), mod_name.end ()} );
+        return name_mgr.lookup_module ({mod_name.begin (), mod_name.end ()});
     }
+
+    auto current_module_id () { return name_mgr.index_of (*current_module_name ()); }
+
 
 private:
     void

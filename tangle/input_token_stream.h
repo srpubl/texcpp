@@ -2,8 +2,10 @@
 
 #include "error.h"
 #include "module_name_scanner.h"
+#include "name.h"
 #include "name_scanner.h"
 #include "patched_in_stream.h"
+#include "text_manager.h"
 
 class input_token_stream 
 {
@@ -12,11 +14,15 @@ public:
     : public virtual name_scanner::diagnostics
     , public virtual module_name_scanner::diagnostics
     {
-        virtual void on_new_major_section () = 0;
+        virtual void on_new_major_section (size_t module_count) = 0;
         virtual void on_section_end_in_comment (error_manager &err) = 0;
         virtual void on_input_end_in_comment (error_manager &err) = 0;
         virtual void on_extra_brace (error_manager &err) = 0;
         virtual void on_improper_marker (error_manager &err) = 0;
+        virtual void on_single_marker_in_string (error_manager &err) = 0;
+        virtual void on_double_marker_in_verbatim (error_manager &err) = 0;
+        virtual void on_missing_end_of_string (error_manager &err) = 0;
+        virtual void on_missing_end_of_verbatim (error_manager &err) = 0;
 
         virtual ~diagnostics () = default;
     };
@@ -27,6 +33,7 @@ private:
     name_scanner _name_scnr;
     module_name_scanner _mod_name_scnr;
 
+    size_t _module_count;
     bool _scanning_hex = false;
 
 public:
@@ -41,16 +48,32 @@ public:
     {}
 
     void
-    initialize ()
+    initialize (std::filesystem::path web_file_name, std::filesystem::path change_file_name)
     {
         _scanning_hex = false;
+        _module_count = 0;
+        _in_str.open (web_file_name, change_file_name);
+    }
+
+    void
+    finalize () 
+    {
+        _in_str.close ();
     }
 
     auto & current_identifier (ilk_value type) { return _name_scnr.retrieve_name (type); }
-    auto & current_module_name () { return _mod_name_scnr.current_module_name (); }
+    auto   current_identifier_id (ilk_value type) { return _name_scnr.retrieve_id (type); }
+    auto   current_module_name () { return _mod_name_scnr.current_module_name (); }
+    auto   current_module_id () { return _mod_name_scnr.current_module_id (); }
+    auto   current_module_count () { return _module_count; }
+    auto & err () { return _in_str.err (); }
+    auto   eof () { return _in_str.eof (); }
 
     char8_t get ();
     char8_t get_next_control_code ();
+    char8_t get_next_new_module ();
+    void copy_string_to (text_manager::builder &builder);
+    void copy_verbatim_to (text_manager::builder &builder);
 
 private:
     void skip_comment ();

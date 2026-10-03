@@ -144,6 +144,6 @@ private:
     void
     push_parametric (name_t const &name);
 
-    void
+    text_t &
     copy_parameter_to_text_mgr ();
 };

@@ -10,11 +10,13 @@ input_token_stream::control_code (char8_t c)
     case u8'\''  : return octal;
     case u8'"'   : return hex;
     case u8'$'   : return check_sum;
-    case u8' '   :
-    case tab_mark: return new_module;
 
     case u8'*':
-        _diagnose.on_new_major_section ();
+        _diagnose.on_new_major_section (_module_count);
+        [[fallthrough]];
+    case u8' '   :
+    case tab_mark:
+        ++_module_count; 
         return new_module;
 
     case u8'D':
@@ -61,10 +63,21 @@ input_token_stream::get_next_control_code ()
         if (_in_str.eol ()) // found only the end marker
             continue;
 
-        auto ascii = _in_str.get ();
-        auto c     = control_code (ascii);
-        if (c != ignore || ascii == u8'>')
-            return c;
+        auto ch = _in_str.get ();
+        if (ch == u8'>')
+            return ignore;
+
+        auto c = control_code (ch);
+
+        if (c == ignore)
+            continue;
+
+        if (c == module_name)
+        {
+            _mod_name_scnr.scan_module_name (_in_str);
+        }
+
+        return c;
     }
 }
 
@@ -186,5 +199,83 @@ input_token_stream::get ()
                 return c;
         }
     }
+}
+
+void
+input_token_stream::copy_string_to (text_manager::builder &builder)
+{
+    char8_t b = u8'\'';
+
+    while (true)
+    {
+        builder << static_cast<text_manager::char_type> (b);
+        if (b == u8'@')
+        {
+            if (_in_str.peek () == u8'@')
+            {
+                _in_str.advance ();  // store only one @
+            }
+            else
+            {
+                _diagnose.on_single_marker_in_string (_in_str.err ());
+            }
+        }
+
+        if (_in_str.end_of_content ())
+        {
+            _diagnose.on_missing_end_of_string (_in_str.err ());
+            _in_str.patch (u8"'\0");
+        }
+
+        b = _in_str.get ();
+        if (b == u8'\'')
+        {
+            if (_in_str.peek () != u8'\'')
+                break;
+
+            _in_str.advance ();
+            builder << U'\'';
+        }
+    }
+    builder << U'\'';
+}
+
+void
+input_token_stream::copy_verbatim_to (text_manager::builder &builder)
+{
+    builder << verbatim;
+    _in_str.line ().mark_end (u8'@');
+
+    while (true)
+    {
+        if (_in_str.peek () == u8'@')
+        {
+            if (!_in_str.end_of_content () && _in_str.peek_ahead () == u8'@')
+            {
+                    builder << U'@';
+                    _in_str.advance (2);
+                    continue;
+            }
+        }
+        else
+        {
+            builder << static_cast<text_manager::char_type> (_in_str.get ());
+            continue;
+        }
+
+        break;
+    }
+
+    if (_in_str.end_of_content ())
+    {
+        _diagnose.on_missing_end_of_verbatim (_in_str.err ());
+    }
+    else if (_in_str.peek_ahead () != u8'>')
+    {
+        _diagnose.on_double_marker_in_verbatim (_in_str.err ());
+    }
+
+    _in_str.advance (2);
+    builder << verbatim;
 }
 

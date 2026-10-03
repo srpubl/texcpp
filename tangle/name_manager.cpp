@@ -166,7 +166,7 @@ compare_module_names (std::u8string_view new_name, std::u8string_view old_name) 
 }
 
 auto
-name_manager::lookup_module (std::u8string_view module_name) -> name_t &
+name_manager::lookup_module (std::u8string_view module_name) -> name_t::optional_reference
 {
     auto c = greater;
     name_t * last_node = nullptr;
@@ -186,7 +186,7 @@ name_manager::lookup_module (std::u8string_view module_name) -> name_t &
         
         default:
             diagnose.on_incompatible ();
-            return no_name ();
+            return std::nullopt;
         }        
     }
 
@@ -209,7 +209,7 @@ name_manager::lookup_module (std::u8string_view module_name) -> name_t &
 }
 
 auto
-name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
+name_manager::lookup_prefix (std::u8string_view module_name) -> name_t::optional_reference
 {
     name_t * current_node = root;
     name_t * resume_node  = nullptr;
@@ -246,6 +246,9 @@ name_manager::lookup_prefix (std::u8string_view module_name) -> name_t &
         diagnose.on_too_many_matches (); 
     }
 
-    return result ? *result : no_name ();
+    if (result)
+        return *result;
+
+    return std::nullopt;
 }
 

@@ -56,10 +56,10 @@ public:
     lookup (ilk_value t, std::u8string_view id, size_t double_chars = 0) -> name_t &;
 
     auto
-    lookup_module (std::u8string_view module_name) -> name_t &;
+    lookup_module (std::u8string_view module_name) -> name_t::optional_reference;
 
     auto
-    lookup_prefix (std::u8string_view module_name) -> name_t &;
+    lookup_prefix (std::u8string_view module_name) -> name_t::optional_reference;
 
     void
     add_simple (text_t &replacement_text)

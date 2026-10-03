@@ -1,6 +1,7 @@
 #pragma once
 
 #include "error.h"
+#include "name.h"
 #include "patched_in_stream.h"
 #include "name_manager.h"
 
@@ -37,5 +38,8 @@ public:
 
     auto &
     retrieve_name (ilk_value type)  { return name_mgr.lookup (type, content, double_chars); }
+
+    auto
+    retrieve_id (ilk_value type) { return name_mgr.index_of (retrieve_name (type)); }
 };
 

@@ -780,5 +780,73 @@ length could be written retroactively into the first two chars of the output lin
 entirely written but not flushed. This would however require a review of `pascal::text_file` so we don't
 do that right now.
 
+### Introducing `builder` in `string_storage`
+
+We want to reduce the need for explicit references to `text_mgr` and `name_mgr`. Especially the building
+of strings via `append_to_next_new` seems a bit cumbersome, and it is not clear who owns the lifecycle 
+of the string to be constructed. 
+
+We therefore introduce a small `builder` class that contains an `operator <<` and feels like an output
+stream. To start the construction of a string, a function calls `string_storage::make_builder`. It can
+then pass a reference to the builder around to other functions, which now don't have to know the 
+`string_storage` instance. In the end, the caller of `make_builder` calls `finalize` on the builder to
+commit the string to the storage. This class could be hardened with a destructor that removes the not
+finalized (commited) string or throws an exception. We don't do this right now as we don't need it.
+
+Instead of using `storage_manager` as a field in `text_manager`, we derive `text_manager` privately 
+from `storage_manager` as it simplifies the usage of `builder` a little bit. We also minimize the
+interface to reduce coupling.
+
+### Extending `input_token_stream`
+
+We move `copy_string_from_buffer_to_text_mgr` as `copy_string_to` and 
+`copy_verbatim_from_buffer_to_text_mgr` as `copy_verbatim_to` to `input_token_stream`. They both get
+`text_manager::builder` as parameter.
+
+We add `module_count` to the class along with a getter, and shift the increment to the place where
+the token `new_module` is generated. This simplifies the management of `module_count` as we don't have
+to store a reference to it in `input_token_stream`. 
+
+We also shift the scanning of the module name to `get_next_control_code`. This technically now scans the
+module name also in cases when it might not be necessary but it simplifies the logic greatly and it is
+not clear that there even is overhead (the characters have to be scanned anyway).
+_
+### Removing the references to `name_mgr.no_name`
+
+In `name_t` we add `using optional_reference = std::optional <std::reference_wrapper <name_t>>;` as a
+convenient type alias. We then return that type instead of `name_t &` from `lookup_prefix` and 
+`lookup_module` (but not `lookup` as this always returns a reference to a valid `name_t`). This allows
+us to not use a special object (`no_name`) and again simplifies our logic a bit. In particular, we don't
+need references to `name_mgr` anymore.
+
+
+### Class `input_parser`
+
+Next, we want to get `next_control` under control (no pun intended). In fact, this is not the next 
+control character but the current token. So we rename it to just that. We also align `get_next` and 
+rename it to `get_next_token`. Now the relationship between `current_token` and `get_next_token` is 
+clear: the latter updates the former.
+
+We then realize that `scan_numeric` is not actually only scanning a numeric value. Its purpose is to 
+actually process the right-hand side of a numeric definition. So while it scans numerics it also adds 
+and subtracts values, i.e., it processes numeric definitions. Hence, we rename it to 
+`process_numeric_definition` and its companion `scan_numeric_one` to `process_numeric_definition_part`. 
+
+Note that tangle deviates from standard parser structures as it treats the digits of a number as 
+individual tokens, which get either processed here or later in the `out_processor`. It might be worth
+investigating whether this could be moved to the `input_token_stream` such that numbers are treated as
+single tokens.
+
+Inside `process_numeric_definition` there is an outer loop with an inner loop, which necessitates three
+return values from `process_numeric_definition_part` indicating we should continue the inner loop, leave
+the inner loop but continue the outer loop, or leave the outer loop. The outer loop, however, just adds
+a call to `get_next_token`, which we will now move inside `process_numeric_definition_part`, or more
+precisely to every switch case that returns `consumed` (indicating that `get_next_token` needs to be
+called).
+
+Now, there are only two return values left: `reswitch` and `done`. This means, whenever we get out from
+the inner loop, we will also exit the outer loop. Hence, we can remove the outer loop as it will never
+execute twice. Also, we can change the return type to `bool`.
+
 
 

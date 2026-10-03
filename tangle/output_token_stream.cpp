@@ -1,4 +1,5 @@
 #include "output_token_stream.h"
+#include "text_manager.h"
 #include "tokens.h"
 
 char32_t
@@ -82,18 +83,17 @@ output_token_stream::push_parametric (name_t const &name)
         return;
     }
 
-    copy_parameter_to_text_mgr ();
-
-    auto &new_text = text_mgr.add_next_new ();
+    auto &new_text = copy_parameter_to_text_mgr ();
     new_text.set_continuation (&text_mgr.root ());
     name_mgr.add_simple (new_text);
 
     push_level (name);
 }
 
-void
+text_t &
 output_token_stream::copy_parameter_to_text_mgr ()
 {
+    auto builder = text_mgr.make_builder ();
     auto &str = cur_state().bytes;
     int balance = 1;  /// excess of ( versus ) while copying a parameter
     str.remove_prefix (1);  // opening (
@@ -105,7 +105,7 @@ output_token_stream::copy_parameter_to_text_mgr ()
         case U'(': 
             ++balance; 
             str.remove_prefix (1);
-            text_mgr.append_to_next_new (b);
+            builder << b;
             break;
 
         case U')':
@@ -113,27 +113,29 @@ output_token_stream::copy_parameter_to_text_mgr ()
             if (--balance == 0)
                 break;
 
-            text_mgr.append_to_next_new (b);
+            builder << b;
             break;
 
         case U'\'':
         {
             auto slice = str.substr (0, str.find(U'\'', 1) + 1);   
-            text_mgr.append_to_next_new (slice);                    
+            builder << slice;                    
             str.remove_prefix (slice.size());
             break;  
         }
 
         case param:
             str.remove_prefix (1);
-            text_mgr.append_to_next_new (0x8000 + name_mgr.index_of (name_mgr.last ()));
+            builder << (0x8000 + name_mgr.index_of (name_mgr.last ()));
             break;
 
         default:
             str.remove_prefix (1);
-            text_mgr.append_to_next_new (b);
+            builder << b;
             break;
         }            
     }
+
+    return builder.finalize (); 
 }
 
